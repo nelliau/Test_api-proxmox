@@ -1,0 +1,4 @@
+# Logs
+*.log
+server.out
+node_modules/

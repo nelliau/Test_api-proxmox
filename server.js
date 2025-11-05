@@ -39,34 +39,84 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   }
 });
 
-// Define Message model
-const Message = sequelize.define('Message', {
-  id: {
-    type: DataTypes.INTEGER.UNSIGNED,
-    primaryKey: true,
-    autoIncrement: true
+// Define Message model aligned with existing MySQL schema `message`
+// SQL columns: id, sender_id, receiver_id, content, created_at
+const Message = sequelize.define(
+  'Message',
+  {
+    id: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    senderId: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      field: 'sender_id',
+    },
+    receiverId: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      field: 'receiver_id',
+    },
+    content: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    createdAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      field: 'created_at',
+      defaultValue: DataTypes.NOW,
+    },
   },
-  sender: {
-    type: DataTypes.STRING(255),
-    allowNull: false
-  },
-  content: {
-    type: DataTypes.TEXT,
-    allowNull: false
-  },
-  timestamp: {
-    type: DataTypes.DATE,
-    allowNull: false,
-    defaultValue: DataTypes.NOW
+  {
+    tableName: 'message',
+    timestamps: false,
   }
-}, {
-  tableName: 'messages',
-  timestamps: false
-});
+);
 
 // Health endpoint (optional minimal REST)
 app.get('/', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+// REST endpoints for messages
+// List messages: /messages?limit=50
+app.get('/messages', async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const messages = await Message.findAll({
+      order: [['id', 'DESC']],
+      limit,
+    });
+    res.json(messages);
+  } catch (err) {
+    console.error('GET /messages failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Create message: { senderId:number, receiverId:number, content:string }
+app.post('/messages', async (req, res) => {
+  try {
+    const { senderId, receiverId, content } = req.body || {};
+    const isValid =
+      typeof senderId === 'number' &&
+      typeof receiverId === 'number' &&
+      typeof content === 'string' &&
+      content.trim().length > 0;
+
+    if (!isValid) {
+      return res.status(400).json({ error: 'invalid_payload' });
+    }
+
+    const saved = await Message.create({ senderId, receiverId, content: content.trim() });
+    res.status(201).json(saved);
+  } catch (err) {
+    console.error('POST /messages failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // Socket.IO events
@@ -81,13 +131,35 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const { sender, content } = data;
-      if (!sender || !content) {
-        console.warn('Invalid payload: sender/content missing');
+      // Support both old shape { sender, content } and new shape { senderId, receiverId, content }
+      const hasNewShape =
+        Object.prototype.hasOwnProperty.call(data, 'senderId') &&
+        Object.prototype.hasOwnProperty.call(data, 'receiverId');
+
+      if (hasNewShape) {
+        const { senderId, receiverId, content } = data;
+        if (
+          typeof senderId !== 'number' ||
+          typeof receiverId !== 'number' ||
+          !content ||
+          typeof content !== 'string'
+        ) {
+          console.warn('Invalid payload: senderId/receiverId/content invalid');
+          return;
+        }
+        const saved = await Message.create({ senderId, receiverId, content });
+        const payload = saved.toJSON();
+        io.emit('message', payload);
         return;
       }
 
-      const saved = await Message.create({ sender, content });
+      // Backward compatibility: if only { sender, content } provided, store sender as receiver-less message
+      const { sender, content } = data;
+      if (!sender || typeof sender !== 'string' || !content || typeof content !== 'string') {
+        console.warn('Invalid payload: sender/content missing');
+        return;
+      }
+      const saved = await Message.create({ senderId: 0, receiverId: 0, content });
       const payload = saved.toJSON();
 
       io.emit('message', payload);
@@ -104,7 +176,8 @@ io.on('connection', (socket) => {
 async function start() {
   try {
     await sequelize.authenticate();
-    await sequelize.sync();
+    // Do not alter existing schema; ensure model is usable
+    await sequelize.sync({ alter: false });
     console.log('Database connected and models synced.');
 
     httpServer.listen(PORT, () => {
@@ -117,5 +190,4 @@ async function start() {
 }
 
 start();
-
 
