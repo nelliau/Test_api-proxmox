@@ -1,10 +1,10 @@
-# Realtime Messaging API (Express + Socket.IO + MySQL)
+# Realtime Messaging API (Express + Socket.IO)
 
 API de messagerie en temps réel pour la communication entre deux téléphones Android.
 
-## 🚀 Installation rapide sur un nouveau serveur
+## 🚀 Installation rapide
 
-### Installation automatique en une commande
+### Installation automatique
 
 ```bash
 # Télécharger et exécuter le script d'installation
@@ -20,59 +20,74 @@ chmod +x install.sh
 ./install.sh
 ```
 
-Le script installe automatiquement tous les prérequis (Docker, Node.js, etc.) et configure l'API.
+## Configuration
 
-📖 **Pour plus de détails, consultez [DEPLOY.md](DEPLOY.md)**
-
----
-
-## Démarrage rapide (installation manuelle)
-
-### 1) Base de données via Docker (MySQL + phpMyAdmin)
-
-Prépare un MySQL initialisé avec ton dump et accessible via phpMyAdmin.
-
-Commandes:
-
-```bash
-docker compose up -d
-```
-
-Accès phpMyAdmin: http://localhost:8080
-
-- Serveur: `mysql`
-- Utilisateur: `root`
-- Mot de passe: `rootpassword`
-
-La base `Dashkey_test` est créée et contient:
-- tables de ton dump (`user`, `message`, etc.)
-- table supplémentaire `messages` utilisée par Socket.IO pour la persistance simple
-
-### 2) API Node.js
-
+1. Copier le fichier d'environnement:
 ```bash
 cp .env.example .env
 npm install
 npm start
 ```
 
-Variables `.env` par défaut (pour Docker):
-
-```
+2. Modifier `.env` avec vos paramètres de base de données:
+```bash
 PORT=3000
-DB_HOST=mysql
-DB_USER=root
-DB_PASSWORD=rootpassword
-DB_NAME=Dashkey_test
+DB_HOST=votre-serveur-db
+DB_USER=votre-utilisateur
+DB_PASSWORD=votre-mot-de-passe
+DB_NAME=votre-base-de-donnees
 ```
 
-Endpoint de santé: `GET /` -> `{ "status": "ok" }`
+## Démarrage
 
-Socket.IO:
-- événement entrant: `message` avec `{ sender, content }`
-- diffusion sortante: `message` avec l'objet sauvegardé `{ id, sender, content, timestamp }`
+### Option A: Démarrage manuel
+```bash
+npm start
+```
 
-### 3) Notes de compatibilité
+### Option B: Service systemd (démarrage automatique)
+```bash
+./install-service.sh
+sudo systemctl start test-api
+sudo systemctl enable test-api
+```
 
-- Le dump d'origine utilise la table `message` avec `sender_id/receiver_id`. L'API temps réel simple utilise une table indépendante `messages` (champ `sender` en texte) pour se concentrer sur l'échange en temps réel sans gestion d'utilisateurs.
-- Tu peux faire évoluer le modèle Sequelize pour s'appuyer sur la table `message` et gérer des utilisateurs si besoin.
+## Endpoints REST
+
+- **Health check**: `GET /` → `{ "status": "ok" }`
+- **Liste des messages**: `GET /messages?limit=50`
+- **Créer un message**: `POST /messages` avec `{ senderId, receiverId, content }`
+
+## Socket.IO
+
+Événements:
+* **Entrant**: `message` avec `{ senderId, receiverId, content }`
+* **Sortant**: `message` avec l'objet sauvegardé `{ id, senderId, receiverId, content, createdAt }`
+
+## Gestion du service
+
+```bash
+# Démarrer
+sudo systemctl start test-api
+
+# Arrêter
+sudo systemctl stop test-api
+
+# Redémarrer
+sudo systemctl restart test-api
+
+# Statut
+sudo systemctl status test-api
+
+# Logs en temps réel
+sudo journalctl -u test-api -f
+```
+
+## Structure de la base de données
+
+L'API utilise la table `message` avec les colonnes suivantes:
+- `id` (INTEGER, auto-increment)
+- `sender_id` (INTEGER)
+- `receiver_id` (INTEGER)
+- `content` (TEXT)
+- `created_at` (DATETIME)
