@@ -1,0 +1,24 @@
+[Unit]
+Description=API WebSocket Realtime Messaging (Test_api-proxmox)
+After=network.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=soc-admin
+WorkingDirectory=/home/soc-admin/Test_api-proxmox
+Environment=NODE_ENV=production
+EnvironmentFile=/home/soc-admin/Test_api-proxmox/.env
+ExecStart=/usr/bin/node /home/soc-admin/Test_api-proxmox/server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+
