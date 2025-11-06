@@ -1,6 +1,32 @@
 # Realtime Messaging API (Express + Socket.IO + MySQL)
 
-## Démarrage rapide
+API de messagerie en temps réel pour la communication entre deux téléphones Android.
+
+## 🚀 Installation rapide sur un nouveau serveur
+
+### Installation automatique en une commande
+
+```bash
+# Télécharger et exécuter le script d'installation
+curl -fsSL https://raw.githubusercontent.com/nelliau/test_api2/main/install.sh | bash
+```
+
+### Installation manuelle
+
+```bash
+git clone https://github.com/nelliau/test_api2.git
+cd test_api2
+chmod +x install.sh
+./install.sh
+```
+
+Le script installe automatiquement tous les prérequis (Docker, Node.js, etc.) et configure l'API.
+
+📖 **Pour plus de détails, consultez [DEPLOY.md](DEPLOY.md)**
+
+---
+
+## Démarrage rapide (installation manuelle)
 
 ### 1) Base de données via Docker (MySQL + phpMyAdmin)
 
