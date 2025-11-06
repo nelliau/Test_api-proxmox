@@ -8,14 +8,14 @@ API de messagerie en temps réel pour la communication entre deux téléphones A
 
 ```bash
 # Télécharger et exécuter le script d'installation
-curl -fsSL https://raw.githubusercontent.com/nelliau/test_api2/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/nelliau/Test_api-proxmox/main/install.sh | bash
 ```
 
 ### Installation manuelle
 
 ```bash
-git clone https://github.com/nelliau/test_api2.git
-cd test_api2
+git clone https://github.com/nelliau/Test_api-proxmox.git
+cd Test_api-proxmox
 chmod +x install.sh
 ./install.sh
 ```
