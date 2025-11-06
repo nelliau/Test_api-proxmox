@@ -18,12 +18,10 @@ NC='\033[0m' # No Color
 # Configuration par défaut
 GITHUB_REPO="https://github.com/nelliau/Test_api-proxmox.git"
 INSTALL_DIR="/home/$(whoami)/Test_api-proxmox"
-PORT_DEFAULT=30443
-DB_PASSWORD_DEFAULT="rootpassword"
+PORT_DEFAULT=3000
 
 # Variables
 PORT=${PORT_DEFAULT}
-DB_PASSWORD=${DB_PASSWORD_DEFAULT}
 SKIP_DEPS=false
 
 ###############################################################################
@@ -61,46 +59,9 @@ print_info() {
 check_prerequisites() {
     print_header "Vérification des prérequis"
     
-    # Vérifier Docker
-    if ! command -v docker &> /dev/null; then
-        print_warning "Docker n'est pas installé"
-        echo "Installation de Docker..."
-        curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-        sudo sh /tmp/get-docker.sh
-        sudo usermod -aG docker $(whoami)
-        rm /tmp/get-docker.sh
-        print_success "Docker installé"
-        print_warning "Vous devez vous déconnecter et reconnecter pour que les changements prennent effet"
-        print_info "Ou exécutez: newgrp docker"
-        exit 1
-    else
-        print_success "Docker est installé"
-        # Vérifier les permissions Docker
-        if ! docker ps &> /dev/null; then
-            print_warning "Vous n'avez pas les permissions Docker"
-            print_info "Ajout de l'utilisateur au groupe docker..."
-            sudo usermod -aG docker $(whoami)
-            print_warning "Vous devez vous déconnecter et reconnecter, ou exécuter: newgrp docker"
-        fi
-    fi
-    
-    # Vérifier Docker Compose
-    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-        print_warning "Docker Compose n'est pas installé, installation..."
-        sudo apt-get update
-        sudo apt-get install -y docker-compose-plugin || {
-            # Fallback: installer docker-compose standalone
-            sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            sudo chmod +x /usr/local/bin/docker-compose
-        }
-        print_success "Docker Compose installé"
-    else
-        print_success "Docker Compose est installé"
-    fi
-    
     # Vérifier Node.js
     if ! command -v node &> /dev/null; then
-        print_error "Node.js n'est pas installé"
+        print_warning "Node.js n'est pas installé"
         echo "Installation de Node.js..."
         curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
         sudo apt-get install -y nodejs
@@ -121,7 +82,7 @@ check_prerequisites() {
     
     # Vérifier Git
     if ! command -v git &> /dev/null; then
-        print_error "Git n'est pas installé"
+        print_warning "Git n'est pas installé"
         echo "Installation de Git..."
         sudo apt-get update
         sudo apt-get install -y git
@@ -184,33 +145,32 @@ configure_environment() {
         PORT=$PORT_INPUT
     fi
     
-    # Demander le mot de passe MySQL
-    echo -n "Mot de passe MySQL root (défaut: $DB_PASSWORD_DEFAULT): "
-    read DB_PASSWORD_INPUT
-    if [ -n "$DB_PASSWORD_INPUT" ]; then
-        DB_PASSWORD=$DB_PASSWORD_INPUT
-    fi
+    # Demander les informations de la base de données externe
+    echo ""
+    print_info "Configuration de la base de données externe:"
+    echo -n "Host de la base de données: "
+    read DB_HOST
+    echo -n "Utilisateur de la base de données: "
+    read DB_USER
+    echo -n "Mot de passe de la base de données: "
+    read -s DB_PASSWORD
+    echo ""
+    echo -n "Nom de la base de données: "
+    read DB_NAME
     
     # Créer le fichier .env
     print_info "Création du fichier .env..."
-    cat > .env <<EOF
+    cat > .env <<ENVEOF
 PORT=$PORT
-DB_HOST=127.0.0.1
-DB_USER=root
+DB_HOST=$DB_HOST
+DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
-DB_NAME=Dashkey_test
-EOF
-    
-    # Mettre à jour docker-compose.yml avec le mot de passe
-    if [ -f "docker-compose.yml" ]; then
-        print_info "Mise à jour de docker-compose.yml..."
-        sed -i "s/MYSQL_ROOT_PASSWORD:.*/MYSQL_ROOT_PASSWORD: $DB_PASSWORD/" docker-compose.yml
-        sed -i "s/PMA_PASSWORD:.*/PMA_PASSWORD: $DB_PASSWORD/" docker-compose.yml
-    fi
+DB_NAME=$DB_NAME
+ENVEOF
     
     print_success "Configuration terminée"
     print_info "Port: $PORT"
-    print_info "Mot de passe MySQL: $DB_PASSWORD"
+    print_info "Base de données: $DB_HOST/$DB_NAME"
 }
 
 ###############################################################################
@@ -229,43 +189,6 @@ install_dependencies() {
     else
         print_warning "Installation des dépendances ignorée"
     fi
-}
-
-###############################################################################
-# Démarrage de MySQL
-###############################################################################
-
-start_mysql() {
-    print_header "Démarrage de MySQL via Docker"
-    
-    cd "$INSTALL_DIR"
-    
-    # Vérifier si MySQL est déjà en cours d'exécution
-    if docker ps | grep -q Test_api-proxmox_mysql; then
-        print_warning "MySQL est déjà en cours d'exécution"
-    else
-        print_info "Démarrage de MySQL..."
-        docker compose up -d mysql
-        
-        # Attendre que MySQL soit prêt
-        print_info "Attente que MySQL soit prêt..."
-        for i in {1..30}; do
-            if docker exec Test_api-proxmox_mysql mysqladmin ping -h localhost -p"$DB_PASSWORD" &> /dev/null 2>&1; then
-                print_success "MySQL est prêt"
-                break
-            fi
-            if [ $i -eq 30 ]; then
-                print_error "MySQL n'a pas démarré dans les temps"
-                print_info "Vérifiez les logs avec: docker logs Test_api-proxmox_mysql"
-                exit 1
-            fi
-            sleep 2
-        done
-    fi
-    
-    # Démarrer phpMyAdmin aussi
-    print_info "Démarrage de phpMyAdmin..."
-    docker compose up -d phpmyadmin 2>/dev/null || print_warning "phpMyAdmin déjà démarré ou erreur (non critique)"
 }
 
 ###############################################################################
@@ -352,20 +275,11 @@ run_tests() {
         fi
     fi
     
-    # Test 2: Vérifier MySQL
-    print_info "Test de la connexion MySQL..."
-    if docker exec Test_api-proxmox_mysql mysqladmin ping -h localhost -p"$DB_PASSWORD" &> /dev/null 2>&1; then
-        print_success "MySQL fonctionne correctement"
-    else
-        print_warning "Problème avec MySQL (vérifiez avec: docker logs Test_api-proxmox_mysql)"
-    fi
-    
     # Afficher les informations de connexion
     print_header "Informations de connexion"
     echo ""
     print_info "API HTTP: http://localhost:$PORT"
     print_info "API WebSocket: ws://localhost:$PORT"
-    print_info "phpMyAdmin: http://localhost:8080"
     echo ""
     print_info "Pour voir les logs: sudo journalctl -u test-api -f"
     echo ""
@@ -395,7 +309,6 @@ main() {
     install_from_github
     configure_environment
     install_dependencies
-    start_mysql
     install_systemd_service
     start_api
     run_tests
@@ -414,4 +327,3 @@ main() {
 
 # Exécuter le script principal
 main "$@"
-
