@@ -17,6 +17,13 @@ Backend Node.js complet pour application de messagerie Android avec authentifica
 - Stockage automatique dans MySQL
 - Support de conversations 1-à-1
 
+### 👥 Système d'Amis
+- Envoi de demandes d'amis
+- Acceptation/Refus de demandes
+- Liste des amis
+- Suppression d'amis
+- Sécurisation complète avec JWT
+
 ### 🗄️ Base de données
 - Connexion à MySQL externe (Proxmox)
 - Compatible avec schéma Symfony existant
@@ -233,6 +240,115 @@ Content-Type: application/json
 
 ---
 
+### 👥 Système d'Amis
+
+#### ➕ Envoyer une demande d'ami
+```http
+POST /friends/request
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "receiverId": 2
+}
+```
+**Réponse (201) :**
+```json
+{
+  "message": "Demande d'ami envoyée",
+  "request": {
+    "id": 1,
+    "requesterId": 5,
+    "receiverId": 2,
+    "status": "pending",
+    "createdAt": "2025-11-10T10:00:00.000Z"
+  }
+}
+```
+
+#### 📬 Récupérer les demandes d'amis reçues
+```http
+GET /friends/requests
+Authorization: Bearer <token>
+```
+**Réponse :**
+```json
+{
+  "requests": [
+    {
+      "id": 1,
+      "requester": {
+        "id": 3,
+        "email": "alice@example.com"
+      },
+      "status": "pending",
+      "createdAt": "2025-11-10T09:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### ✅ Accepter ou refuser une demande
+```http
+PUT /friends/request/1
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "action": "accept"
+}
+```
+**Paramètres :**
+- `action` : `"accept"` ou `"reject"`
+
+**Réponse :**
+```json
+{
+  "message": "Demande acceptée",
+  "request": {
+    "id": 1,
+    "status": "accepted"
+  }
+}
+```
+
+#### 🧑‍🤝‍🧑 Liste des amis acceptés
+```http
+GET /friends
+Authorization: Bearer <token>
+```
+**Réponse :**
+```json
+{
+  "friends": [
+    {
+      "friendshipId": 1,
+      "friend": {
+        "id": 3,
+        "email": "alice@example.com"
+      },
+      "since": "2025-11-10T10:05:00.000Z"
+    }
+  ]
+}
+```
+
+#### ❌ Supprimer un ami
+```http
+DELETE /friends/1
+Authorization: Bearer <token>
+```
+**Paramètre :** ID de l'amitié (friendshipId)
+
+**Réponse :**
+```json
+{
+  "message": "Ami supprimé avec succès"
+}
+```
+
+---
+
 ## 🔥 Socket.IO - Messagerie Temps Réel
 
 ### Connexion et authentification
@@ -385,6 +501,24 @@ CREATE TABLE `message` (
   PRIMARY KEY (`id`),
   FOREIGN KEY (`sender_id`) REFERENCES `user` (`id`) ON DELETE CASCADE,
   FOREIGN KEY (`receiver_id`) REFERENCES `user` (`id`) ON DELETE CASCADE
+);
+```
+
+### Table `friend_request`
+```sql
+CREATE TABLE `friend_request` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `requester_id` int(11) NOT NULL,
+  `receiver_id` int(11) NOT NULL,
+  `status` enum('pending','accepted','rejected') DEFAULT 'pending',
+  `created_at` datetime DEFAULT current_timestamp(),
+  `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unique_friendship` (`requester_id`,`receiver_id`),
+  FOREIGN KEY (`requester_id`) REFERENCES `user` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`receiver_id`) REFERENCES `user` (`id`) ON DELETE CASCADE,
+  KEY `idx_receiver_status` (`receiver_id`,`status`),
+  KEY `idx_requester_status` (`requester_id`,`status`)
 );
 ```
 
@@ -614,6 +748,7 @@ Pour toute question ou problème :
 
 ## 🎯 Roadmap
 
+- [x] Système d'amis avec demandes
 - [ ] Rate limiting sur les endpoints
 - [ ] Support des fichiers/images
 - [ ] Notifications push

@@ -118,9 +118,55 @@ const Message = sequelize.define(
   }
 );
 
+// Define FriendRequest model
+const FriendRequest = sequelize.define(
+  'FriendRequest',
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    requesterId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: 'requester_id',
+    },
+    receiverId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: 'receiver_id',
+    },
+    status: {
+      type: DataTypes.ENUM('pending', 'accepted', 'rejected'),
+      defaultValue: 'pending',
+    },
+    createdAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      field: 'created_at',
+      defaultValue: DataTypes.NOW,
+    },
+    updatedAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      field: 'updated_at',
+      defaultValue: DataTypes.NOW,
+    },
+  },
+  {
+    tableName: 'friend_request',
+    timestamps: false,
+  }
+);
+
 // Define associations
 Message.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
 Message.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
+
+// Friend request associations
+FriendRequest.belongsTo(User, { foreignKey: 'requesterId', as: 'requester' });
+FriendRequest.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
 
 // ============================================================================
 // AUTHENTICATION MIDDLEWARE
@@ -360,6 +406,234 @@ app.post('/messages', authenticateJWT, async (req, res) => {
     res.status(201).json(message);
   } catch (err) {
     console.error('POST /messages failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// ============================================================================
+// FRIENDS SYSTEM ENDPOINTS
+// ============================================================================
+
+// Send a friend request
+app.post('/friends/request', authenticateJWT, async (req, res) => {
+  try {
+    const requesterId = req.user.userId;
+    const { receiverId } = req.body || {};
+
+    // Validation
+    if (!receiverId || typeof receiverId !== 'number') {
+      return res.status(400).json({ error: 'bad_request', message: 'receiverId requis' });
+    }
+
+    // Cannot send request to yourself
+    if (requesterId === receiverId) {
+      return res.status(400).json({ error: 'bad_request', message: 'Vous ne pouvez pas vous ajouter vous-même' });
+    }
+
+    // Check if receiver exists
+    const receiver = await User.findByPk(receiverId);
+    if (!receiver) {
+      return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
+    }
+
+    // Check if friend request already exists (in either direction)
+    const existingRequest = await FriendRequest.findOne({
+      where: {
+        [Sequelize.Op.or]: [
+          { requesterId, receiverId },
+          { requesterId: receiverId, receiverId: requesterId }
+        ]
+      }
+    });
+
+    if (existingRequest) {
+      if (existingRequest.status === 'accepted') {
+        return res.status(409).json({ error: 'conflict', message: 'Vous êtes déjà amis' });
+      }
+      if (existingRequest.status === 'pending') {
+        return res.status(409).json({ error: 'conflict', message: 'Demande déjà envoyée' });
+      }
+    }
+
+    // Create friend request
+    const friendRequest = await FriendRequest.create({
+      requesterId,
+      receiverId,
+      status: 'pending'
+    });
+
+    res.status(201).json({
+      message: 'Demande d\'ami envoyée',
+      request: {
+        id: friendRequest.id,
+        requesterId: friendRequest.requesterId,
+        receiverId: friendRequest.receiverId,
+        status: friendRequest.status,
+        createdAt: friendRequest.createdAt
+      }
+    });
+  } catch (err) {
+    console.error('POST /friends/request failed:', err);
+    res.status(500).json({ error: 'internal_error', message: 'Erreur lors de l\'envoi de la demande' });
+  }
+});
+
+// Get pending friend requests (received)
+app.get('/friends/requests', authenticateJWT, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const requests = await FriendRequest.findAll({
+      where: {
+        receiverId: userId,
+        status: 'pending'
+      },
+      include: [
+        {
+          model: User,
+          as: 'requester',
+          attributes: ['id', 'email']
+        }
+      ],
+      order: [['createdAt', 'DESC']]
+    });
+
+    res.json({
+      requests: requests.map(req => ({
+        id: req.id,
+        requester: {
+          id: req.requester.id,
+          email: req.requester.email
+        },
+        status: req.status,
+        createdAt: req.createdAt
+      }))
+    });
+  } catch (err) {
+    console.error('GET /friends/requests failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Accept or reject a friend request
+app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const requestId = parseInt(req.params.id);
+    const { action } = req.body || {}; // 'accept' or 'reject'
+
+    // Validation
+    if (!action || !['accept', 'reject'].includes(action)) {
+      return res.status(400).json({ error: 'bad_request', message: 'action doit être "accept" ou "reject"' });
+    }
+
+    // Find the friend request
+    const friendRequest = await FriendRequest.findByPk(requestId);
+    
+    if (!friendRequest) {
+      return res.status(404).json({ error: 'not_found', message: 'Demande introuvable' });
+    }
+
+    // Check if current user is the receiver
+    if (friendRequest.receiverId !== userId) {
+      return res.status(403).json({ error: 'forbidden', message: 'Vous ne pouvez pas modifier cette demande' });
+    }
+
+    // Check if already processed
+    if (friendRequest.status !== 'pending') {
+      return res.status(400).json({ error: 'bad_request', message: 'Cette demande a déjà été traitée' });
+    }
+
+    // Update status
+    const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+    await friendRequest.update({ status: newStatus });
+
+    res.json({
+      message: action === 'accept' ? 'Demande acceptée' : 'Demande refusée',
+      request: {
+        id: friendRequest.id,
+        status: newStatus
+      }
+    });
+  } catch (err) {
+    console.error('PUT /friends/request/:id failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Get list of friends (accepted requests)
+app.get('/friends', authenticateJWT, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Get all accepted friend requests where user is either requester or receiver
+    const friendRequests = await FriendRequest.findAll({
+      where: {
+        [Sequelize.Op.or]: [
+          { requesterId: userId },
+          { receiverId: userId }
+        ],
+        status: 'accepted'
+      },
+      include: [
+        {
+          model: User,
+          as: 'requester',
+          attributes: ['id', 'email']
+        },
+        {
+          model: User,
+          as: 'receiver',
+          attributes: ['id', 'email']
+        }
+      ],
+      order: [['updatedAt', 'DESC']]
+    });
+
+    // Map to get the friend (the other user)
+    const friends = friendRequests.map(req => {
+      const friend = req.requesterId === userId ? req.receiver : req.requester;
+      return {
+        friendshipId: req.id,
+        friend: {
+          id: friend.id,
+          email: friend.email
+        },
+        since: req.updatedAt
+      };
+    });
+
+    res.json({ friends });
+  } catch (err) {
+    console.error('GET /friends failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Remove a friend (delete friendship)
+app.delete('/friends/:id', authenticateJWT, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const friendshipId = parseInt(req.params.id);
+
+    // Find the friend request
+    const friendRequest = await FriendRequest.findByPk(friendshipId);
+
+    if (!friendRequest) {
+      return res.status(404).json({ error: 'not_found', message: 'Amitié introuvable' });
+    }
+
+    // Check if user is part of this friendship
+    if (friendRequest.requesterId !== userId && friendRequest.receiverId !== userId) {
+      return res.status(403).json({ error: 'forbidden', message: 'Vous ne pouvez pas supprimer cette amitié' });
+    }
+
+    // Delete the friendship
+    await friendRequest.destroy();
+
+    res.json({ message: 'Ami supprimé avec succès' });
+  } catch (err) {
+    console.error('DELETE /friends/:id failed:', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
