@@ -295,6 +295,22 @@ Content-Type: application/json
   "receiverId": 2
 }
 ```
+
+**OU avec email :**
+```http
+POST /friends/request
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "receiverEmail": "bob@example.com"
+}
+```
+
+**Paramètres (un des deux requis) :**
+- `receiverId` (Int) : ID de l'utilisateur
+- `receiverEmail` (String) : Email de l'utilisateur
+
 **Réponse (201) :**
 ```json
 {

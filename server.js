@@ -493,30 +493,49 @@ app.get('/users/:id', authenticateJWT, async (req, res) => {
 app.post('/friends/request', authenticateJWT, async (req, res) => {
   try {
     const senderId = req.user.userId;
-    const { receiverId } = req.body || {};
+    const { receiverId, receiverEmail } = req.body || {};
 
-    // Validation
-    if (!receiverId || typeof receiverId !== 'number') {
-      return res.status(400).json({ error: 'bad_request', message: 'receiverId requis' });
+    // Validation - accept either receiverId or receiverEmail
+    if (!receiverId && !receiverEmail) {
+      return res.status(400).json({ 
+        error: 'bad_request', 
+        message: 'receiverId ou receiverEmail requis' 
+      });
     }
 
-    // Cannot send request to yourself
-    if (senderId === receiverId) {
-      return res.status(400).json({ error: 'bad_request', message: 'Vous ne pouvez pas vous ajouter vous-même' });
+    // Find receiver by ID or email
+    let receiver;
+    if (receiverId) {
+      if (typeof receiverId !== 'number') {
+        return res.status(400).json({ error: 'bad_request', message: 'receiverId doit être un nombre' });
+      }
+      receiver = await User.findByPk(receiverId);
+    } else {
+      // Find by email
+      if (typeof receiverEmail !== 'string' || receiverEmail.trim().length === 0) {
+        return res.status(400).json({ error: 'bad_request', message: 'receiverEmail invalide' });
+      }
+      receiver = await User.findOne({ where: { email: receiverEmail.trim() } });
     }
 
     // Check if receiver exists
-    const receiver = await User.findByPk(receiverId);
     if (!receiver) {
       return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
+    }
+
+    const actualReceiverId = receiver.id;
+
+    // Cannot send request to yourself
+    if (senderId === actualReceiverId) {
+      return res.status(400).json({ error: 'bad_request', message: 'Vous ne pouvez pas vous ajouter vous-même' });
     }
 
     // Check if friend request already exists (in either direction)
     const existingRequest = await FriendRequest.findOne({
       where: {
         [Sequelize.Op.or]: [
-          { senderId, receiverId },
-          { senderId: receiverId, receiverId: senderId }
+          { senderId, receiverId: actualReceiverId },
+          { senderId: actualReceiverId, receiverId: senderId }
         ]
       }
     });
@@ -533,7 +552,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
     // Create friend request
     const friendRequest = await FriendRequest.create({
       senderId,
-      receiverId,
+      receiverId: actualReceiverId,
       status: 'pending'
     });
 

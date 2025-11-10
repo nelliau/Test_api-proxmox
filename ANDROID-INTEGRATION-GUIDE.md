@@ -72,7 +72,12 @@ data class UserProfileResponse(
 
 data class FriendRequestBody(
     @SerializedName("receiverId")
-    val receiverId: Int  // ⚠️ INT, pas String !
+    val receiverId: Int? = null,  // Optionnel si receiverEmail est fourni
+    
+    @SerializedName("receiverEmail")
+    val receiverEmail: String? = null  // Optionnel si receiverId est fourni
+    
+    // ⚠️ Au moins un des deux doit être fourni !
 )
 
 data class FriendActionBody(
@@ -297,13 +302,35 @@ class UserRepository(private val api: MessagingApi) {
         }
     }
     
-    // Envoyer une demande d'ami
+    // Envoyer une demande d'ami par ID
     suspend fun sendFriendRequest(token: String, receiverId: Int): Result<FriendRequestResponse> {
         return withContext(Dispatchers.IO) {
             try {
                 val response = api.sendFriendRequest(
                     token = "Bearer $token",
                     request = FriendRequestBody(receiverId = receiverId)
+                )
+                
+                if (response.isSuccessful && response.body() != null) {
+                    Result.success(response.body()!!)
+                } else {
+                    // Lire le message d'erreur du serveur
+                    val errorBody = response.errorBody()?.string()
+                    Result.failure(Exception("Erreur ${response.code()}: $errorBody"))
+                }
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+    }
+    
+    // Envoyer une demande d'ami par EMAIL
+    suspend fun sendFriendRequestByEmail(token: String, receiverEmail: String): Result<FriendRequestResponse> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val response = api.sendFriendRequest(
+                    token = "Bearer $token",
+                    request = FriendRequestBody(receiverEmail = receiverEmail)
                 )
                 
                 if (response.isSuccessful && response.body() != null) {
