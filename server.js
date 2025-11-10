@@ -411,6 +411,81 @@ app.post('/messages', authenticateJWT, async (req, res) => {
 });
 
 // ============================================================================
+// USER SEARCH ENDPOINT
+// ============================================================================
+
+// Search users by email (for finding friends)
+app.get('/users/search', authenticateJWT, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const { q, email, limit } = req.query;
+
+    // Validation
+    const searchQuery = q || email;
+    if (!searchQuery || typeof searchQuery !== 'string' || searchQuery.trim().length === 0) {
+      return res.status(400).json({ 
+        error: 'bad_request', 
+        message: 'Paramètre "q" ou "email" requis pour la recherche' 
+      });
+    }
+
+    const searchLimit = limit ? Math.min(parseInt(limit), 50) : 20;
+
+    // Search users by email (partial match)
+    const users = await User.findAll({
+      where: {
+        email: {
+          [Sequelize.Op.like]: `%${searchQuery}%`
+        },
+        id: {
+          [Sequelize.Op.ne]: currentUserId  // Exclude current user
+        }
+      },
+      attributes: ['id', 'email'],
+      limit: searchLimit
+    });
+
+    res.json({
+      users: users.map(u => ({
+        id: u.id,
+        email: u.email
+      }))
+    });
+  } catch (err) {
+    console.error('GET /users/search failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Get user by ID (for profile view)
+app.get('/users/:id', authenticateJWT, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: 'bad_request', message: 'ID utilisateur invalide' });
+    }
+
+    const user = await User.findByPk(userId, {
+      attributes: ['id', 'email', 'roles']
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
+    }
+
+    res.json({
+      id: user.id,
+      email: user.email,
+      roles: user.roles
+    });
+  } catch (err) {
+    console.error('GET /users/:id failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// ============================================================================
 // FRIENDS SYSTEM ENDPOINTS
 // ============================================================================
 

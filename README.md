@@ -240,6 +240,49 @@ Content-Type: application/json
 
 ---
 
+### 🔍 Recherche d'Utilisateurs
+
+#### 🔎 Rechercher des utilisateurs par email
+```http
+GET /users/search?q=alice
+Authorization: Bearer <token>
+```
+**Paramètres :**
+- `q` ou `email` (requis) : Texte à rechercher dans les emails
+- `limit` (optionnel) : Nombre max de résultats (défaut: 20, max: 50)
+
+**Réponse :**
+```json
+{
+  "users": [
+    {
+      "id": 3,
+      "email": "alice@example.com"
+    },
+    {
+      "id": 5,
+      "email": "alice.smith@example.com"
+    }
+  ]
+}
+```
+
+#### 👤 Obtenir un utilisateur par ID
+```http
+GET /users/5
+Authorization: Bearer <token>
+```
+**Réponse :**
+```json
+{
+  "id": 5,
+  "email": "alice@example.com",
+  "roles": ["ROLE_USER"]
+}
+```
+
+---
+
 ### 👥 Système d'Amis
 
 #### ➕ Envoyer une demande d'ami
