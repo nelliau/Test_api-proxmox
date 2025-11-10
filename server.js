@@ -4,6 +4,8 @@ import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
 import { Sequelize, DataTypes } from 'sequelize';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 
 // Load environment variables
 dotenv.config();
@@ -29,6 +31,8 @@ const DB_PORT = process.env.DB_PORT ? Number(process.env.DB_PORT) : 3306;
 const DB_USER = process.env.DB_USER || 'root';
 const DB_PASSWORD = process.env.DB_PASSWORD || '';
 const DB_NAME = process.env.DB_NAME || '';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 // Initialize Sequelize (MySQL)
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
@@ -41,23 +45,59 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   }
 });
 
-// Define Message model aligned with existing MySQL schema `message`
-// SQL columns: id, sender_id, receiver_id, content, created_at
+// Define User model aligned with existing MySQL schema
+const User = sequelize.define(
+  'User',
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    email: {
+      type: DataTypes.STRING(180),
+      allowNull: false,
+      unique: true,
+    },
+    roles: {
+      type: DataTypes.TEXT('long'),
+      allowNull: false,
+      defaultValue: '["ROLE_USER"]',
+      get() {
+        const rawValue = this.getDataValue('roles');
+        return rawValue ? JSON.parse(rawValue) : ['ROLE_USER'];
+      },
+      set(value) {
+        this.setDataValue('roles', JSON.stringify(value));
+      }
+    },
+    password: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+  },
+  {
+    tableName: 'user',
+    timestamps: false,
+  }
+);
+
+// Define Message model aligned with existing MySQL schema
 const Message = sequelize.define(
   'Message',
   {
     id: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       primaryKey: true,
       autoIncrement: true,
     },
     senderId: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       allowNull: false,
       field: 'sender_id',
     },
     receiverId: {
-      type: DataTypes.INTEGER.UNSIGNED,
+      type: DataTypes.INTEGER,
       allowNull: false,
       field: 'receiver_id',
     },
@@ -78,20 +118,200 @@ const Message = sequelize.define(
   }
 );
 
-// Health endpoint (optional minimal REST)
+// Define associations
+Message.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
+Message.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
+
+// ============================================================================
+// AUTHENTICATION MIDDLEWARE
+// ============================================================================
+
+const authenticateJWT = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'unauthorized', message: 'Token manquant ou invalide' });
+  }
+
+  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded; // { userId, email, roles }
+    next();
+  } catch (err) {
+    console.error('JWT verification failed:', err.message);
+    return res.status(401).json({ error: 'unauthorized', message: 'Token invalide ou expiré' });
+  }
+};
+
+// ============================================================================
+// PUBLIC ENDPOINTS
+// ============================================================================
+
+// Health check
 app.get('/', (_req, res) => {
-  res.json({ status: 'ok' });
+  res.json({ status: 'ok', message: 'Realtime Messaging API' });
 });
 
-// REST endpoints for messages
-// List messages: /messages?limit=50
-app.get('/messages', async (req, res) => {
+// Register new user
+app.post('/register', async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const messages = await Message.findAll({
-      order: [['id', 'DESC']],
-      limit,
+    const { email, password } = req.body || {};
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({ error: 'bad_request', message: 'Email et mot de passe requis' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'bad_request', message: 'Le mot de passe doit contenir au moins 6 caractères' });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ where: { email } });
+    if (existingUser) {
+      return res.status(409).json({ error: 'conflict', message: 'Cet email est déjà utilisé' });
+    }
+
+    // Hash password (compatible with Symfony bcrypt)
+    const hashedPassword = await bcrypt.hash(password, 13);
+
+    // Create user
+    const user = await User.create({
+      email,
+      password: hashedPassword,
+      roles: ['ROLE_USER'],
     });
+
+    // Generate JWT
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    res.status(201).json({
+      message: 'Utilisateur créé avec succès',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
+    });
+  } catch (err) {
+    console.error('POST /register failed:', err);
+    res.status(500).json({ error: 'internal_error', message: 'Erreur lors de la création du compte' });
+  }
+});
+
+// Login
+app.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({ error: 'bad_request', message: 'Email et mot de passe requis' });
+    }
+
+    // Find user
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
+      return res.status(401).json({ error: 'unauthorized', message: 'Email ou mot de passe incorrect' });
+    }
+
+    // Verify password (compatible with Symfony bcrypt $2y$ format)
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'unauthorized', message: 'Email ou mot de passe incorrect' });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    res.json({
+      message: 'Connexion réussie',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
+    });
+  } catch (err) {
+    console.error('POST /login failed:', err);
+    res.status(500).json({ error: 'internal_error', message: 'Erreur lors de la connexion' });
+  }
+});
+
+// ============================================================================
+// PROTECTED ENDPOINTS (require JWT authentication)
+// ============================================================================
+
+// Get current user info
+app.get('/me', authenticateJWT, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.userId, {
+      attributes: ['id', 'email', 'roles'],
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
+    }
+
+    res.json({
+      id: user.id,
+      email: user.email,
+      roles: user.roles,
+    });
+  } catch (err) {
+    console.error('GET /me failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Get conversation history between two users
+// GET /messages?userId=2 (returns conversation between current user and user ID 2)
+app.get('/messages', authenticateJWT, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const otherUserId = req.query.userId ? Number(req.query.userId) : null;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+
+    if (!otherUserId) {
+      return res.status(400).json({ error: 'bad_request', message: 'userId requis en query parameter' });
+    }
+
+    // Get messages between current user and other user (both directions)
+    const messages = await Message.findAll({
+      where: {
+        [Sequelize.Op.or]: [
+          { senderId: currentUserId, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: currentUserId },
+        ],
+      },
+      order: [['createdAt', 'ASC']],
+      limit,
+      include: [
+        { model: User, as: 'sender', attributes: ['id', 'email'] },
+        { model: User, as: 'receiver', attributes: ['id', 'email'] },
+      ],
+    });
+
     res.json(messages);
   } catch (err) {
     console.error('GET /messages failed:', err);
@@ -99,91 +319,194 @@ app.get('/messages', async (req, res) => {
   }
 });
 
-// Create message: { senderId:number, receiverId:number, content:string }
-app.post('/messages', async (req, res) => {
+// Send a message (REST endpoint - alternative to Socket.IO)
+app.post('/messages', authenticateJWT, async (req, res) => {
   try {
-    const { senderId, receiverId, content } = req.body || {};
-    const isValid =
-      typeof senderId === 'number' &&
-      typeof receiverId === 'number' &&
-      typeof content === 'string' &&
-      content.trim().length > 0;
+    const senderId = req.user.userId;
+    const { receiverId, content } = req.body || {};
 
-    if (!isValid) {
-      return res.status(400).json({ error: 'invalid_payload' });
+    // Validation
+    if (!receiverId || !content) {
+      return res.status(400).json({ error: 'bad_request', message: 'receiverId et content requis' });
     }
 
-    const saved = await Message.create({ senderId, receiverId, content: content.trim() });
-    res.status(201).json(saved);
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      return res.status(400).json({ error: 'bad_request', message: 'Le contenu ne peut pas être vide' });
+    }
+
+    // Check if receiver exists
+    const receiver = await User.findByPk(receiverId);
+    if (!receiver) {
+      return res.status(404).json({ error: 'not_found', message: 'Destinataire introuvable' });
+    }
+
+    // Save message
+    const message = await Message.create({
+      senderId,
+      receiverId,
+      content: content.trim(),
+    });
+
+    // Emit to Socket.IO rooms (if connected)
+    const roomName = getRoomName(senderId, receiverId);
+    io.to(roomName).emit('message', {
+      id: message.id,
+      senderId: message.senderId,
+      receiverId: message.receiverId,
+      content: message.content,
+      createdAt: message.createdAt,
+    });
+
+    res.status(201).json(message);
   } catch (err) {
     console.error('POST /messages failed:', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Socket.IO events
+// ============================================================================
+// SOCKET.IO - PRIVATE MESSAGING
+// ============================================================================
+
+// Helper to create a consistent room name for two users
+function getRoomName(userId1, userId2) {
+  // Always use the same room name regardless of order
+  const [smaller, larger] = [userId1, userId2].sort((a, b) => a - b);
+  return `chat_${smaller}_${larger}`;
+}
+
+// Store connected users: { socketId: userId }
+const connectedUsers = new Map();
+
 io.on('connection', (socket) => {
-  console.log('A user connected', socket.id);
+  console.log('Socket connected:', socket.id);
 
-  socket.on('message', async (data) => {
+  // Authenticate socket connection
+  socket.on('authenticate', async (data) => {
     try {
-      console.log('Received message:', data);
+      const { token } = data || {};
 
-      if (!data || typeof data !== 'object') {
+      if (!token) {
+        socket.emit('error', { message: 'Token manquant' });
         return;
       }
 
-      // Support both old shape { sender, content } and new shape { senderId, receiverId, content }
-      const hasNewShape =
-        Object.prototype.hasOwnProperty.call(data, 'senderId') &&
-        Object.prototype.hasOwnProperty.call(data, 'receiverId');
+      // Verify JWT
+      const decoded = jwt.verify(token, JWT_SECRET);
+      const userId = decoded.userId;
 
-      if (hasNewShape) {
-        const { senderId, receiverId, content } = data;
-        if (
-          typeof senderId !== 'number' ||
-          typeof receiverId !== 'number' ||
-          !content ||
-          typeof content !== 'string'
-        ) {
-          console.warn('Invalid payload: senderId/receiverId/content invalid');
-          return;
-        }
-        const saved = await Message.create({ senderId, receiverId, content });
-        const payload = saved.toJSON();
-        io.emit('message', payload);
-        return;
-      }
+      // Store user
+      connectedUsers.set(socket.id, userId);
+      socket.userId = userId;
 
-      // Backward compatibility: if only { sender, content } provided, store sender as receiver-less message
-      const { sender, content } = data;
-      if (!sender || typeof sender !== 'string' || !content || typeof content !== 'string') {
-        console.warn('Invalid payload: sender/content missing');
-        return;
-      }
-      const saved = await Message.create({ senderId: 0, receiverId: 0, content });
-      const payload = saved.toJSON();
-
-      io.emit('message', payload);
+      console.log(`User ${userId} authenticated on socket ${socket.id}`);
+      socket.emit('authenticated', { userId, message: 'Authentification réussie' });
     } catch (err) {
-      console.error('Error handling message event:', err);
+      console.error('Socket authentication failed:', err.message);
+      socket.emit('error', { message: 'Token invalide' });
     }
   });
 
+  // Join a conversation room
+  socket.on('join_conversation', (data) => {
+    try {
+      const { otherUserId } = data || {};
+
+      if (!socket.userId) {
+        socket.emit('error', { message: 'Non authentifié. Utilisez l\'événement "authenticate" d\'abord.' });
+        return;
+      }
+
+      if (!otherUserId || typeof otherUserId !== 'number') {
+        socket.emit('error', { message: 'otherUserId invalide' });
+        return;
+      }
+
+      const roomName = getRoomName(socket.userId, otherUserId);
+      socket.join(roomName);
+
+      console.log(`User ${socket.userId} joined room ${roomName}`);
+      socket.emit('joined_conversation', { roomName, otherUserId });
+    } catch (err) {
+      console.error('Error joining conversation:', err);
+      socket.emit('error', { message: 'Erreur lors de la jonction à la conversation' });
+    }
+  });
+
+  // Send message in real-time
+  socket.on('send_message', async (data) => {
+    try {
+      const { receiverId, content } = data || {};
+
+      if (!socket.userId) {
+        socket.emit('error', { message: 'Non authentifié' });
+        return;
+      }
+
+      // Validation
+      if (!receiverId || !content || typeof content !== 'string' || content.trim().length === 0) {
+        socket.emit('error', { message: 'receiverId et content requis' });
+        return;
+      }
+
+      // Check if receiver exists
+      const receiver = await User.findByPk(receiverId);
+      if (!receiver) {
+        socket.emit('error', { message: 'Destinataire introuvable' });
+        return;
+      }
+
+      // Save message to database
+      const message = await Message.create({
+        senderId: socket.userId,
+        receiverId,
+        content: content.trim(),
+      });
+
+      // Send to both users in the conversation room
+      const roomName = getRoomName(socket.userId, receiverId);
+      io.to(roomName).emit('message', {
+        id: message.id,
+        senderId: message.senderId,
+        receiverId: message.receiverId,
+        content: message.content,
+        createdAt: message.createdAt,
+      });
+
+      console.log(`Message sent from ${socket.userId} to ${receiverId} in room ${roomName}`);
+    } catch (err) {
+      console.error('Error handling send_message:', err);
+      socket.emit('error', { message: 'Erreur lors de l\'envoi du message' });
+    }
+  });
+
+  // Disconnect
   socket.on('disconnect', () => {
-    console.log('User disconnected', socket.id);
+    const userId = connectedUsers.get(socket.id);
+    if (userId) {
+      console.log(`User ${userId} disconnected (socket ${socket.id})`);
+      connectedUsers.delete(socket.id);
+    } else {
+      console.log('Socket disconnected:', socket.id);
+    }
   });
 });
+
+// ============================================================================
+// START SERVER
+// ============================================================================
 
 async function start() {
   try {
     await sequelize.authenticate();
-    // Do not alter existing schema; ensure model is usable
+    // Do not alter existing schema; ensure models are usable
     await sequelize.sync({ alter: false });
     console.log('Database connected and models synced.');
 
     httpServer.listen(PORT, () => {
-      console.log(`Server listening on port ${PORT}`);
+      console.log(`✅ Server listening on port ${PORT}`);
+      console.log(`📡 Socket.IO ready for real-time messaging`);
+      console.log(`🔐 JWT authentication enabled`);
     });
   } catch (err) {
     console.error('Failed to start server:', err);
@@ -192,4 +515,3 @@ async function start() {
 }
 
 start();
-
