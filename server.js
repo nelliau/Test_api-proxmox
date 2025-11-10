@@ -27,6 +27,7 @@ const io = new SocketIOServer(httpServer, {
 // Environment variables
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const DB_HOST = process.env.DB_HOST || 'localhost';
+const DB_PORT = process.env.DB_PORT ? Number(process.env.DB_PORT) : 3306;
 const DB_USER = process.env.DB_USER || 'root';
 const DB_PASSWORD = process.env.DB_PASSWORD || '';
 const DB_NAME = process.env.DB_NAME || '';
@@ -36,6 +37,7 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 // Initialize Sequelize (MySQL)
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   host: DB_HOST,
+  port: DB_PORT,
   dialect: 'mysql',
   logging: false,
   dialectOptions: {
