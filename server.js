@@ -118,7 +118,7 @@ const Message = sequelize.define(
   }
 );
 
-// Define FriendRequest model
+// Define FriendRequest model (maps to existing 'friends' table)
 const FriendRequest = sequelize.define(
   'FriendRequest',
   {
@@ -127,10 +127,10 @@ const FriendRequest = sequelize.define(
       primaryKey: true,
       autoIncrement: true,
     },
-    requesterId: {
+    senderId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      field: 'requester_id',
+      field: 'sender_id',
     },
     receiverId: {
       type: DataTypes.INTEGER,
@@ -138,7 +138,7 @@ const FriendRequest = sequelize.define(
       field: 'receiver_id',
     },
     status: {
-      type: DataTypes.ENUM('pending', 'accepted', 'rejected'),
+      type: DataTypes.ENUM('pending', 'accepted', 'declined'),
       defaultValue: 'pending',
     },
     createdAt: {
@@ -155,7 +155,7 @@ const FriendRequest = sequelize.define(
     },
   },
   {
-    tableName: 'friend_request',
+    tableName: 'friends',
     timestamps: false,
   }
 );
@@ -165,7 +165,7 @@ Message.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
 Message.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
 
 // Friend request associations
-FriendRequest.belongsTo(User, { foreignKey: 'requesterId', as: 'requester' });
+FriendRequest.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
 FriendRequest.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
 
 // ============================================================================
@@ -417,7 +417,7 @@ app.post('/messages', authenticateJWT, async (req, res) => {
 // Send a friend request
 app.post('/friends/request', authenticateJWT, async (req, res) => {
   try {
-    const requesterId = req.user.userId;
+    const senderId = req.user.userId;
     const { receiverId } = req.body || {};
 
     // Validation
@@ -426,7 +426,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
     }
 
     // Cannot send request to yourself
-    if (requesterId === receiverId) {
+    if (senderId === receiverId) {
       return res.status(400).json({ error: 'bad_request', message: 'Vous ne pouvez pas vous ajouter vous-même' });
     }
 
@@ -440,8 +440,8 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
     const existingRequest = await FriendRequest.findOne({
       where: {
         [Sequelize.Op.or]: [
-          { requesterId, receiverId },
-          { requesterId: receiverId, receiverId: requesterId }
+          { senderId, receiverId },
+          { senderId: receiverId, receiverId: senderId }
         ]
       }
     });
@@ -457,7 +457,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
 
     // Create friend request
     const friendRequest = await FriendRequest.create({
-      requesterId,
+      senderId,
       receiverId,
       status: 'pending'
     });
@@ -466,7 +466,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
       message: 'Demande d\'ami envoyée',
       request: {
         id: friendRequest.id,
-        requesterId: friendRequest.requesterId,
+        senderId: friendRequest.senderId,
         receiverId: friendRequest.receiverId,
         status: friendRequest.status,
         createdAt: friendRequest.createdAt
@@ -491,7 +491,7 @@ app.get('/friends/requests', authenticateJWT, async (req, res) => {
       include: [
         {
           model: User,
-          as: 'requester',
+          as: 'sender',
           attributes: ['id', 'email']
         }
       ],
@@ -501,9 +501,9 @@ app.get('/friends/requests', authenticateJWT, async (req, res) => {
     res.json({
       requests: requests.map(req => ({
         id: req.id,
-        requester: {
-          id: req.requester.id,
-          email: req.requester.email
+        sender: {
+          id: req.sender.id,
+          email: req.sender.email
         },
         status: req.status,
         createdAt: req.createdAt
@@ -520,11 +520,11 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
     const requestId = parseInt(req.params.id);
-    const { action } = req.body || {}; // 'accept' or 'reject'
+    const { action } = req.body || {}; // 'accept' or 'decline'
 
     // Validation
-    if (!action || !['accept', 'reject'].includes(action)) {
-      return res.status(400).json({ error: 'bad_request', message: 'action doit être "accept" ou "reject"' });
+    if (!action || !['accept', 'decline'].includes(action)) {
+      return res.status(400).json({ error: 'bad_request', message: 'action doit être "accept" ou "decline"' });
     }
 
     // Find the friend request
@@ -545,7 +545,7 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
     }
 
     // Update status
-    const newStatus = action === 'accept' ? 'accepted' : 'rejected';
+    const newStatus = action === 'accept' ? 'accepted' : 'declined';
     await friendRequest.update({ status: newStatus });
 
     res.json({
@@ -566,11 +566,11 @@ app.get('/friends', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Get all accepted friend requests where user is either requester or receiver
+    // Get all accepted friend requests where user is either sender or receiver
     const friendRequests = await FriendRequest.findAll({
       where: {
         [Sequelize.Op.or]: [
-          { requesterId: userId },
+          { senderId: userId },
           { receiverId: userId }
         ],
         status: 'accepted'
@@ -578,7 +578,7 @@ app.get('/friends', authenticateJWT, async (req, res) => {
       include: [
         {
           model: User,
-          as: 'requester',
+          as: 'sender',
           attributes: ['id', 'email']
         },
         {
@@ -592,7 +592,7 @@ app.get('/friends', authenticateJWT, async (req, res) => {
 
     // Map to get the friend (the other user)
     const friends = friendRequests.map(req => {
-      const friend = req.requesterId === userId ? req.receiver : req.requester;
+      const friend = req.senderId === userId ? req.receiver : req.sender;
       return {
         friendshipId: req.id,
         friend: {
