@@ -362,22 +362,125 @@ app.get('/messages', authenticateJWT, async (req, res) => {
   }
 });
 
-// Get offline/pending messages - DÉSACTIVÉ - Plus de stockage BDD
+// Get offline/pending messages (not delivered yet)
 app.get('/messages/pending', authenticateJWT, async (req, res) => {
-  res.json({ messages: [] }); // Toujours vide - pas de stockage BDD
+  try {
+    const userId = req.user.userId;
+
+    const messages = await Message.findAll({
+      where: {
+        receiverId: userId,
+        delivered: false
+      },
+      order: [['createdAt', 'ASC']],
+      include: [
+        { model: User, as: 'sender', attributes: ['id', 'email'] }
+      ],
+    });
+
+    res.json({ messages });
+  } catch (err) {
+    console.error('GET /messages/pending failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
-// Send a message via REST - DÉSACTIVÉ - Utilisez Socket.IO uniquement
+// Send a message via REST - COMPATIBILITÉ AVEC ANCIEN CODE ANDROID
+// Note: Préférez utiliser Socket.IO pour la livraison directe en temps réel
 app.post('/messages', authenticateJWT, async (req, res) => {
-  res.status(410).json({
-    error: 'deprecated',
-    message: 'L\'envoi de messages via REST est désactivé. Utilisez Socket.IO exclusivement.'
-  });
+  try {
+    const senderId = req.user.userId;
+    const { receiverId, content } = req.body || {};
+
+    if (!receiverId || !content) {
+      return res.status(400).json({ error: 'bad_request', message: 'receiverId et content requis' });
+    }
+
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      return res.status(400).json({ error: 'bad_request', message: 'Le contenu ne peut pas être vide' });
+    }
+
+    const receiver = await User.findByPk(receiverId);
+    if (!receiver) {
+      return res.status(404).json({ error: 'not_found', message: 'Destinataire introuvable' });
+    }
+
+    console.log(`[POST /messages] Envoi message de ${senderId} vers ${receiverId} (via REST)`);
+
+    // Vérifier si le destinataire est en ligne
+    const receiverSockets = getUserSockets(receiverId);
+
+    if (receiverSockets.size > 0) {
+      // LIVRAISON DIRECTE - Le destinataire est en ligne
+      console.log(`📨 Livraison directe via Socket.IO (destinataire en ligne)`);
+
+      const sender = await User.findByPk(senderId, { attributes: ['email'] });
+      const messageData = {
+        senderId,
+        senderEmail: sender.email,
+        receiverId,
+        content: content.trim(),
+        timestamp: Date.now()
+      };
+
+      receiverSockets.forEach(socketId => {
+        io.to(socketId).emit('message', messageData);
+      });
+
+      // Retourner une réponse factice pour l'API (le message n'est PAS stocké en BDD)
+      res.status(201).json({
+        id: 0, // ID fictif
+        senderId,
+        receiverId,
+        content: content.trim(),
+        createdAt: new Date().toISOString(),
+        delivered: true
+      });
+    } else {
+      // STOCKAGE OFFLINE - Le destinataire est hors ligne
+      console.log(`💾 Destinataire offline, stockage en BDD`);
+
+      const message = await Message.create({
+        senderId,
+        receiverId,
+        content: content.trim(),
+        delivered: false
+      });
+
+      res.status(201).json({
+        id: message.id,
+        senderId: message.senderId,
+        receiverId: message.receiverId,
+        content: message.content,
+        createdAt: message.createdAt,
+        delivered: false
+      });
+    }
+  } catch (err) {
+    console.error('POST /messages failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
-// Mark messages as delivered - DÉSACTIVÉ - Plus de stockage BDD
+// Mark messages as delivered (client confirms receipt)
 app.post('/messages/delivered', authenticateJWT, async (req, res) => {
-  res.json({ message: 'Endpoint désactivé - pas de stockage BDD', count: 0 });
+  try {
+    const { messageIds } = req.body || {};
+
+    if (!Array.isArray(messageIds)) {
+      return res.status(400).json({ error: 'bad_request', message: 'messageIds array required' });
+    }
+
+    await Message.update(
+      { delivered: true },
+      { where: { id: messageIds } }
+    );
+
+    res.json({ message: 'Messages marked as delivered', count: messageIds.length });
+  } catch (err) {
+    console.error('POST /messages/delivered failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // Search user by email
@@ -629,15 +732,13 @@ app.delete('/friends/:id', authenticateJWT, async (req, res) => {
 // ============================================================================
 
 io.on('connection', (socket) => {
-  console.log('\n🔌 New socket connection:', socket.id);
+  console.log('🔌 Socket connected:', socket.id);
 
   socket.on('authenticate', async (data) => {
     try {
-      console.log(`\n🔐 [authenticate] Socket ${socket.id} attempting authentication...`);
       const { token } = data || {};
 
       if (!token) {
-        console.log(`   ❌ No token provided`);
         socket.emit('error', { message: 'Token manquant' });
         return;
       }
@@ -648,11 +749,34 @@ io.on('connection', (socket) => {
       socket.userId = userId;
       addUserSocket(userId, socket.id);
 
-      console.log(`   ✅ User ${userId} authenticated on socket ${socket.id}`);
-      console.log(`   📊 User ${userId} now has ${userSockets.get(userId)?.size || 0} active connection(s)`);
+      console.log(`✅ User ${userId} authenticated`);
       socket.emit('authenticated', { userId, message: 'Authentifié' });
 
-      // PAS de livraison de messages offline - le serveur ne stocke plus rien
+      // Deliver pending offline messages
+      const pendingMessages = await Message.findAll({
+        where: { receiverId: userId, delivered: false },
+        order: [['createdAt', 'ASC']],
+        include: [{ model: User, as: 'sender', attributes: ['id', 'email'] }]
+      });
+
+      if (pendingMessages.length > 0) {
+        console.log(`📬 Delivering ${pendingMessages.length} pending message(s) to user ${userId}`);
+
+        pendingMessages.forEach(msg => {
+          socket.emit('message', {
+            id: msg.id,
+            senderId: msg.senderId,
+            senderEmail: msg.sender.email,
+            content: msg.content,
+            timestamp: msg.createdAt.getTime(),
+            fromServer: true
+          });
+        });
+
+        // Mark as delivered
+        const messageIds = pendingMessages.map(m => m.id);
+        await Message.update({ delivered: true }, { where: { id: messageIds } });
+      }
     } catch (err) {
       console.error('❌ Socket authentication failed:', err.message);
       socket.emit('error', { message: 'Token invalide' });
@@ -664,24 +788,18 @@ io.on('connection', (socket) => {
     try {
       const { receiverId, content } = data || {};
 
-      console.log(`\n📨 [send_message] Received from user ${socket.userId}`);
-      console.log(`   → receiverId: ${receiverId}, content: "${content?.substring(0, 50)}..."`);
-
       if (!socket.userId) {
-        console.log(`   ❌ Socket not authenticated`);
         socket.emit('error', { message: 'Non authentifié' });
         return;
       }
 
       if (!receiverId || !content || typeof content !== 'string' || content.trim().length === 0) {
-        console.log(`   ❌ Invalid data: receiverId or content missing`);
         socket.emit('error', { message: 'receiverId et content requis' });
         return;
       }
 
       const receiver = await User.findByPk(receiverId);
       if (!receiver) {
-        console.log(`   ❌ Receiver ${receiverId} not found in database`);
         socket.emit('error', { message: 'Destinataire introuvable' });
         return;
       }
@@ -697,47 +815,48 @@ io.on('connection', (socket) => {
       };
 
       // Check if receiver is online
-      console.log(`\n🔍 Checking if user ${receiverId} is online...`);
-      console.log(`   Current online users map:`, Array.from(userSockets.entries()).map(([id, sockets]) => `User ${id}: ${sockets.size} socket(s)`));
-
       const receiverSockets = getUserSockets(receiverId);
-      console.log(`   → User ${receiverId} has ${receiverSockets.size} socket(s) connected`);
 
       if (receiverSockets.size > 0) {
         // DIRECT DELIVERY - receiver is online
-        console.log(`\n📨 ✅ DIRECT DELIVERY from ${socket.userId} to ${receiverId}`);
-        console.log(`   → Delivering to ${receiverSockets.size} device(s): [${Array.from(receiverSockets).join(', ')}]`);
+        console.log(`📨 Direct delivery from ${socket.userId} to ${receiverId} (${receiverSockets.size} device(s))`);
 
         let deliveredCount = 0;
         receiverSockets.forEach(socketId => {
           io.to(socketId).emit('message', messageData);
           deliveredCount++;
-          console.log(`   ✓ Sent to socket ${socketId}`);
         });
 
         // Confirm to sender
         socket.emit('message_delivered', {
-          tempId: data.tempId,
+          tempId: data.tempId, // if client sends a temp ID
           receiverId,
           timestamp: messageData.timestamp,
           direct: true
         });
 
-        console.log(`   ✅ Message delivered directly to ${deliveredCount} device(s) - NOT STORED IN DB\n`);
+        console.log(`✅ Message delivered directly to ${deliveredCount} device(s)`);
       } else {
-        // RECEIVER OFFLINE - Message perdu (pas de stockage BDD)
-        console.log(`\n⚠️  RECEIVER OFFLINE: User ${receiverId} is not connected`);
-        console.log(`   → Message NOT delivered and NOT stored (lost)`);
+        // STORE FOR OFFLINE DELIVERY
+        console.log(`💾 Receiver ${receiverId} offline, storing message in DB`);
 
-        // Informer l'expéditeur que le destinataire est offline
-        socket.emit('message_not_delivered', {
-          tempId: data.tempId,
+        const savedMessage = await Message.create({
+          senderId: socket.userId,
           receiverId,
-          timestamp: messageData.timestamp,
-          reason: 'Destinataire hors ligne'
+          content: content.trim(),
+          delivered: false
         });
 
-        console.log(`   ⚠️  Message not delivered - receiver offline\n`);
+        // Confirm to sender (stored for later)
+        socket.emit('message_stored', {
+          tempId: data.tempId,
+          messageId: savedMessage.id,
+          receiverId,
+          timestamp: savedMessage.createdAt.getTime(),
+          offline: true
+        });
+
+        console.log(`💾 Message stored with ID ${savedMessage.id}`);
       }
 
     } catch (err) {
@@ -747,26 +866,40 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`\n👋 [disconnect] Socket ${socket.id} disconnected`);
     if (socket.userId) {
-      const beforeCount = userSockets.get(socket.userId)?.size || 0;
       removeUserSocket(socket.userId, socket.id);
-      const afterCount = userSockets.get(socket.userId)?.size || 0;
-      console.log(`   → User ${socket.userId}: ${beforeCount} → ${afterCount} connection(s)`);
-      if (afterCount === 0) {
-        console.log(`   ❌ User ${socket.userId} is now OFFLINE`);
-      }
+      console.log(`👋 User ${socket.userId} socket ${socket.id} disconnected`);
     } else {
-      console.log(`   → Anonymous socket (not authenticated)`);
+      console.log('👋 Anonymous socket disconnected:', socket.id);
     }
-    console.log('');
   });
 });
 
 // ============================================================================
-// CLEANUP JOB - DÉSACTIVÉ - Plus de stockage de messages en BDD
+// CLEANUP JOB - Delete old delivered messages
 // ============================================================================
-// Le serveur fait uniquement relais Socket.IO - pas de nettoyage nécessaire
+
+async function cleanupOldMessages() {
+  try {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const deleted = await Message.destroy({
+      where: {
+        delivered: true,
+        createdAt: { [Sequelize.Op.lt]: oneDayAgo }
+      }
+    });
+
+    if (deleted > 0) {
+      console.log(`🗑️ Cleaned up ${deleted} old delivered message(s)`);
+    }
+  } catch (err) {
+    console.error('❌ Cleanup job failed:', err);
+  }
+}
+
+// Run cleanup every hour
+setInterval(cleanupOldMessages, 60 * 60 * 1000);
 
 // ============================================================================
 // START SERVER
@@ -780,10 +913,13 @@ async function start() {
 
     httpServer.listen(PORT, () => {
       console.log(`\n🚀 Server listening on port ${PORT}`);
-      console.log(`📡 Socket.IO ready for RELAY-ONLY message delivery`);
-      console.log(`⚠️  Messages are NEVER stored in DB - Socket.IO relay only`);
+      console.log(`📡 Socket.IO ready for DIRECT message delivery`);
+      console.log(`💾 Messages stored in DB ONLY when receiver is offline`);
       console.log(`🔐 JWT authentication enabled\n`);
     });
+
+    // Run initial cleanup
+    await cleanupOldMessages();
   } catch (err) {
     console.error('❌ Failed to start server:', err);
     process.exit(1);
