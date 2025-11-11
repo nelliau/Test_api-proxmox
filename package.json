@@ -5,7 +5,8 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:socket": "node test-socketio.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -14,8 +15,10 @@
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.10.3",
+    "node-fetch": "^3.3.2",
     "sequelize": "^6.37.3",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5"
   }
 }
 
