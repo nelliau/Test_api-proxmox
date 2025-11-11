@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test:socket": "node test-socketio.js"
+    "test:socket": "node test-socketio.js",
+    "test:socket:simple": "node test-socketio-simple.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

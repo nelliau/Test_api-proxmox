@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Test - Real-time Messaging</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 { 
+            color: #333; 
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .section { 
+            margin: 25px 0; 
+            padding: 20px; 
+            background: #f8f9fa; 
+            border-radius: 8px; 
+        }
+        .section h3 { 
+            color: #495057; 
+            margin-bottom: 15px;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: auto;
+        }
+        .status-badge.disconnected { background: #f8d7da; color: #721c24; }
+        .status-badge.connected { background: #d4edda; color: #155724; }
+        .status-badge.authenticated { background: #d1ecf1; color: #0c5460; }
+        
+        input, button { 
+            padding: 12px 16px; 
+            margin: 8px 0; 
+            width: 100%; 
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        button { 
+            background: #667eea;
+            color: white; 
+            border: none; 
+            cursor: pointer;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        button:hover { 
+            background: #5568d3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        button:disabled {
+            background: #ced4da;
+            cursor: not-allowed;
+            transform: none;
+        }
+        button.secondary {
+            background: #6c757d;
+        }
+        button.secondary:hover {
+            background: #5a6268;
+        }
+        button.success {
+            background: #28a745;
+        }
+        button.success:hover {
+            background: #218838;
+        }
+        
+        .row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        
+        #log { 
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px; 
+            border-radius: 8px; 
+            margin-top: 20px; 
+            height: 350px; 
+            overflow-y: auto; 
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            box-shadow: inset 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .log-entry {
+            margin: 4px 0;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .log-entry.success { 
+            color: #4ec9b0;
+            background: rgba(78, 201, 176, 0.1);
+        }
+        .log-entry.error { 
+            color: #f48771;
+            background: rgba(244, 135, 113, 0.1);
+        }
+        .log-entry.info { 
+            color: #9cdcfe;
+        }
+        .log-entry.warning {
+            color: #dcdcaa;
+            background: rgba(220, 220, 170, 0.1);
+        }
+        .log-time {
+            color: #858585;
+            font-size: 11px;
+        }
+        
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .info-box strong {
+            color: #1976d2;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-card .label {
+            font-size: 12px;
+            color: #6c757d;
+            text-transform: uppercase;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Socket.IO Test Console</h1>
+        <p class="subtitle">Real-time messaging test interface</p>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number" id="statMessages">0</div>
+                <div class="label">Messages Sent</div>
+            </div>
+            <div class="stat-card">
+                <div class="number" id="statReceived">0</div>
+                <div class="label">Messages Received</div>
+            </div>
+            <div class="stat-card">
+                <div class="number" id="statDelivered">0</div>
+                <div class="label">Delivered</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>
+                1️⃣ Authentication
+                <span class="status-badge" id="authStatus">Not logged in</span>
+            </h3>
+            <input type="email" id="email" placeholder="Email" value="test@example.com">
+            <input type="password" id="password" placeholder="Password (min 6 chars)" value="password123">
+            <div class="row">
+                <button onclick="register()">📝 Register</button>
+                <button onclick="login()">🔐 Login</button>
+            </div>
+            <div class="info-box" style="display:none" id="userInfo">
+                <strong>User ID:</strong> <span id="userIdDisplay">-</span><br>
+                <strong>Token:</strong> <span id="tokenDisplay" style="font-family: monospace; font-size: 11px;">-</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>
+                2️⃣ Socket.IO Connection
+                <span class="status-badge disconnected" id="socketStatus">Disconnected</span>
+            </h3>
+            <div class="row">
+                <button onclick="connectSocket()" id="btnConnect">🔌 Connect</button>
+                <button onclick="disconnect()" class="secondary" id="btnDisconnect" disabled>❌ Disconnect</button>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>3️⃣ Send Message</h3>
+            <input type="number" id="receiverId" placeholder="Receiver User ID (must exist)">
+            <input type="text" id="messageContent" placeholder="Message content" value="Hello! 👋">
+            <button onclick="sendMessage()" class="success" id="btnSend" disabled>📤 Send Message</button>
+        </div>
+        
+        <div class="section">
+            <h3>📋 Console Log</h3>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000'; // Change this to your server URL
+        let token = null;
+        let userId = null;
+        let socket = null;
+        let stats = { sent: 0, received: 0, delivered: 0 };
+
+        function updateStats() {
+            document.getElementById('statMessages').textContent = stats.sent;
+            document.getElementById('statReceived').textContent = stats.received;
+            document.getElementById('statDelivered').textContent = stats.delivered;
+        }
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `<span class="log-time">[${time}]</span> ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateAuthStatus(status, badgeType = 'disconnected') {
+            const badge = document.getElementById('authStatus');
+            badge.textContent = status;
+            badge.className = `status-badge ${badgeType}`;
+        }
+
+        function updateSocketStatus(status, badgeType = 'disconnected') {
+            const badge = document.getElementById('socketStatus');
+            badge.textContent = status;
+            badge.className = `status-badge ${badgeType}`;
+            
+            document.getElementById('btnConnect').disabled = (badgeType !== 'disconnected');
+            document.getElementById('btnDisconnect').disabled = (badgeType === 'disconnected');
+            document.getElementById('btnSend').disabled = (badgeType !== 'authenticated');
+        }
+
+        async function register() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            if (!email || !password || password.length < 6) {
+                log('❌ Email and password (min 6 chars) required', 'error');
+                return;
+            }
+            
+            log(`📝 Registering user: ${email}...`);
+            
+            try {
+                const res = await fetch(`${API_URL}/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await res.json();
+                
+                if (res.ok) {
+                    token = data.token;
+                    userId = data.user.id;
+                    log(`✅ Registration successful! User ID: ${userId}`, 'success');
+                    
+                    document.getElementById('userInfo').style.display = 'block';
+                    document.getElementById('userIdDisplay').textContent = userId;
+                    document.getElementById('tokenDisplay').textContent = token.substring(0, 40) + '...';
+                    
+                    updateAuthStatus(`User ${userId}`, 'connected');
+                } else {
+                    log(`❌ Registration failed: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Network error: ${error.message}`, 'error');
+            }
+        }
+
+        async function login() {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            
+            if (!email || !password) {
+                log('❌ Email and password required', 'error');
+                return;
+            }
+            
+            log(`🔐 Logging in: ${email}...`);
+            
+            try {
+                const res = await fetch(`${API_URL}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await res.json();
+                
+                if (res.ok) {
+                    token = data.token;
+                    userId = data.user.id;
+                    log(`✅ Login successful! User ID: ${userId}`, 'success');
+                    
+                    document.getElementById('userInfo').style.display = 'block';
+                    document.getElementById('userIdDisplay').textContent = userId;
+                    document.getElementById('tokenDisplay').textContent = token.substring(0, 40) + '...';
+                    
+                    updateAuthStatus(`User ${userId}`, 'connected');
+                } else {
+                    log(`❌ Login failed: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Network error: ${error.message}`, 'error');
+            }
+        }
+
+        function connectSocket() {
+            if (!token) {
+                log('❌ Please register or login first!', 'error');
+                return;
+            }
+            
+            log('🔌 Connecting to Socket.IO server...');
+            updateSocketStatus('Connecting...', 'warning');
+            
+            socket = io(API_URL, {
+                transports: ['websocket', 'polling']
+            });
+            
+            socket.on('connect', () => {
+                log(`✅ Socket connected! ID: ${socket.id}`, 'success');
+                updateSocketStatus(`Connected: ${socket.id}`, 'connected');
+                
+                log('🔐 Authenticating with JWT token...');
+                socket.emit('authenticate', { token });
+            });
+            
+            socket.on('authenticated', (data) => {
+                log(`✅ Authentication successful! User ID: ${data.userId}`, 'success');
+                updateSocketStatus(`Authenticated (User ${data.userId})`, 'authenticated');
+            });
+            
+            socket.on('message', (data) => {
+                stats.received++;
+                updateStats();
+                log(`📨 <strong>MESSAGE RECEIVED!</strong>`, 'success');
+                log(`   From: User ${data.senderId} (${data.senderEmail})`, 'success');
+                log(`   Content: "${data.content}"`, 'success');
+                log(`   Timestamp: ${new Date(data.timestamp).toLocaleString()}`, 'info');
+            });
+            
+            socket.on('message_delivered', (data) => {
+                stats.delivered++;
+                updateStats();
+                log(`✅ <strong>Message delivered to User ${data.receiverId}</strong>`, 'success');
+                log(`   Direct delivery: ${data.direct ? 'Yes' : 'No'}`, 'info');
+                log(`   Timestamp: ${new Date(data.timestamp).toLocaleString()}`, 'info');
+            });
+            
+            socket.on('message_not_delivered', (data) => {
+                log(`⚠️  <strong>Message NOT delivered</strong>`, 'warning');
+                log(`   Reason: ${data.reason}`, 'warning');
+                log(`   Note: Server does NOT store messages in DB (relay-only mode)`, 'info');
+            });
+            
+            socket.on('error', (error) => {
+                log(`❌ Socket error: ${error.message}`, 'error');
+            });
+            
+            socket.on('connect_error', (error) => {
+                log(`❌ Connection error: ${error.message}`, 'error');
+                updateSocketStatus('Connection failed', 'disconnected');
+            });
+            
+            socket.on('disconnect', (reason) => {
+                log(`👋 Socket disconnected: ${reason}`, 'warning');
+                updateSocketStatus('Disconnected', 'disconnected');
+            });
+        }
+
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                log('👋 Manually disconnected from Socket.IO', 'info');
+                updateSocketStatus('Disconnected', 'disconnected');
+            }
+        }
+
+        function sendMessage() {
+            if (!socket || !socket.connected) {
+                log('❌ Not connected! Please connect to Socket.IO first.', 'error');
+                return;
+            }
+            
+            const receiverId = parseInt(document.getElementById('receiverId').value);
+            const content = document.getElementById('messageContent').value;
+            
+            if (!receiverId || isNaN(receiverId)) {
+                log('❌ Please enter a valid receiver User ID', 'error');
+                return;
+            }
+            
+            if (!content || content.trim().length === 0) {
+                log('❌ Please enter a message', 'error');
+                return;
+            }
+            
+            stats.sent++;
+            updateStats();
+            
+            log(`📤 Sending message to User ${receiverId}...`, 'info');
+            log(`   Content: "${content}"`, 'info');
+            
+            socket.emit('send_message', {
+                receiverId,
+                content: content.trim(),
+                tempId: `web-test-${Date.now()}`
+            });
+        }
+
+        // Log on page load
+        log('🚀 Socket.IO Test Console initialized', 'success');
+        log(`📡 Server URL: ${API_URL}`, 'info');
+        log('ℹ️  Step 1: Register or Login', 'info');
+        log('ℹ️  Step 2: Connect to Socket.IO', 'info');
+        log('ℹ️  Step 3: Send a message to another user', 'info');
+    </script>
+</body>
+</html>
