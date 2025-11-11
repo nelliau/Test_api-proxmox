@@ -418,7 +418,7 @@ app.post('/messages', authenticateJWT, async (req, res) => {
 app.get('/users/search', authenticateJWT, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
-    const { q, email, limit } = req.query;
+    const { q, email, exact, limit } = req.query;
 
     // Validation
     const searchQuery = q || email;
@@ -430,25 +430,45 @@ app.get('/users/search', authenticateJWT, async (req, res) => {
     }
 
     const searchLimit = limit ? Math.min(parseInt(limit), 50) : 20;
+    const isExactSearch = exact === 'true' || exact === '1';
 
-    // Search users by email (partial match)
-    const users = await User.findAll({
-      where: {
-        email: {
-          [Sequelize.Op.like]: `%${searchQuery}%`
+    // Search users by email (exact or partial match)
+    let users;
+    
+    if (isExactSearch) {
+      // Exact match - returns single user or empty array
+      const user = await User.findOne({
+        where: {
+          email: searchQuery.trim(),
+          id: {
+            [Sequelize.Op.ne]: currentUserId  // Exclude current user
+          }
         },
-        id: {
-          [Sequelize.Op.ne]: currentUserId  // Exclude current user
-        }
-      },
-      attributes: ['id', 'email'],
-      limit: searchLimit
-    });
+        attributes: ['id', 'email', 'roles']
+      });
+      
+      users = user ? [user] : [];
+    } else {
+      // Partial match - returns multiple users
+      users = await User.findAll({
+        where: {
+          email: {
+            [Sequelize.Op.like]: `%${searchQuery}%`
+          },
+          id: {
+            [Sequelize.Op.ne]: currentUserId  // Exclude current user
+          }
+        },
+        attributes: ['id', 'email'],
+        limit: searchLimit
+      });
+    }
 
     res.json({
       users: users.map(u => ({
         id: u.id,
-        email: u.email
+        email: u.email,
+        ...(isExactSearch && u.roles ? { roles: u.roles } : {})
       }))
     });
   } catch (err) {
