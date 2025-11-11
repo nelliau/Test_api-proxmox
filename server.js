@@ -392,11 +392,22 @@ app.post('/messages', authenticateJWT, async (req, res) => {
     const senderId = req.user.userId;
     const { receiverId, content } = req.body || {};
 
+    console.log(`[POST /messages] Requête reçue:`, {
+      senderId,
+      receiverId,
+      content,
+      contentType: typeof content,
+      contentLength: content ? content.length : 0,
+      body: req.body
+    });
+
     if (!receiverId || !content) {
+      console.log(`❌ Validation échouée: receiverId=${receiverId}, content=${content}`);
       return res.status(400).json({ error: 'bad_request', message: 'receiverId et content requis' });
     }
 
     if (typeof content !== 'string' || content.trim().length === 0) {
+      console.log(`❌ Validation échouée: contenu vide ou invalide`);
       return res.status(400).json({ error: 'bad_request', message: 'Le contenu ne peut pas être vide' });
     }
 
@@ -413,8 +424,14 @@ app.post('/messages', authenticateJWT, async (req, res) => {
     if (receiverSockets.size > 0) {
       // LIVRAISON DIRECTE - Le destinataire est en ligne
       console.log(`📨 Livraison directe via Socket.IO (destinataire en ligne)`);
-      
+
       const sender = await User.findByPk(senderId, { attributes: ['email'] });
+
+      if (!sender) {
+        console.error(`❌ Erreur: Sender ${senderId} introuvable dans la base de données!`);
+        return res.status(500).json({ error: 'internal_error', message: 'Erreur: expéditeur introuvable' });
+      }
+
       const messageData = {
         senderId,
         senderEmail: sender.email,
@@ -439,7 +456,7 @@ app.post('/messages', authenticateJWT, async (req, res) => {
     } else {
       // STOCKAGE OFFLINE - Le destinataire est hors ligne
       console.log(`💾 Destinataire offline, stockage en BDD`);
-      
+
       const message = await Message.create({
         senderId,
         receiverId,
@@ -457,8 +474,9 @@ app.post('/messages', authenticateJWT, async (req, res) => {
       });
     }
   } catch (err) {
-    console.error('POST /messages failed:', err);
-    res.status(500).json({ error: 'internal_error' });
+    console.error('❌ POST /messages failed:', err.message);
+    console.error('Stack trace:', err.stack);
+    res.status(500).json({ error: 'internal_error', message: err.message });
   }
 });
 
