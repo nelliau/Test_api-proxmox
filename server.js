@@ -174,13 +174,13 @@ FriendRequest.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
 
 const authenticateJWT = (req, res, next) => {
   const authHeader = req.headers.authorization;
-
+  
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'unauthorized', message: 'Token manquant ou invalide' });
   }
-
+  
   const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-
+  
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded; // { userId, email, roles }
@@ -204,32 +204,32 @@ app.get('/', (_req, res) => {
 app.post('/register', async (req, res) => {
   try {
     const { email, password } = req.body || {};
-
+    
     // Validation
     if (!email || !password) {
       return res.status(400).json({ error: 'bad_request', message: 'Email et mot de passe requis' });
     }
-
+    
     if (password.length < 6) {
       return res.status(400).json({ error: 'bad_request', message: 'Le mot de passe doit contenir au moins 6 caractères' });
     }
-
+    
     // Check if user already exists
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) {
       return res.status(409).json({ error: 'conflict', message: 'Cet email est déjà utilisé' });
     }
-
+    
     // Hash password (compatible with Symfony bcrypt)
     const hashedPassword = await bcrypt.hash(password, 13);
-
+    
     // Create user
     const user = await User.create({
       email,
       password: hashedPassword,
       roles: ['ROLE_USER'],
     });
-
+    
     // Generate JWT
     const token = jwt.sign(
       {
@@ -240,7 +240,7 @@ app.post('/register', async (req, res) => {
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
-
+    
     res.status(201).json({
       message: 'Utilisateur créé avec succès',
       token,
@@ -260,24 +260,24 @@ app.post('/register', async (req, res) => {
 app.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
-
+    
     // Validation
     if (!email || !password) {
       return res.status(400).json({ error: 'bad_request', message: 'Email et mot de passe requis' });
     }
-
+    
     // Find user
     const user = await User.findOne({ where: { email } });
     if (!user) {
       return res.status(401).json({ error: 'unauthorized', message: 'Email ou mot de passe incorrect' });
     }
-
+    
     // Verify password (compatible with Symfony bcrypt $2y$ format)
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'unauthorized', message: 'Email ou mot de passe incorrect' });
     }
-
+    
     // Generate JWT
     const token = jwt.sign(
       {
@@ -288,7 +288,7 @@ app.post('/login', async (req, res) => {
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
-
+    
     res.json({
       message: 'Connexion réussie',
       token,
@@ -314,11 +314,11 @@ app.get('/me', authenticateJWT, async (req, res) => {
     const user = await User.findByPk(req.user.userId, {
       attributes: ['id', 'email', 'roles'],
     });
-
+    
     if (!user) {
       return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
     }
-
+    
     res.json({
       id: user.id,
       email: user.email,
@@ -337,11 +337,11 @@ app.get('/messages', authenticateJWT, async (req, res) => {
     const currentUserId = req.user.userId;
     const otherUserId = req.query.userId ? Number(req.query.userId) : null;
     const limit = Math.min(Number(req.query.limit) || 50, 200);
-
+    
     if (!otherUserId) {
       return res.status(400).json({ error: 'bad_request', message: 'userId requis en query parameter' });
     }
-
+    
     // Get messages between current user and other user (both directions)
     const messages = await Message.findAll({
       where: {
@@ -357,7 +357,7 @@ app.get('/messages', authenticateJWT, async (req, res) => {
         { model: User, as: 'receiver', attributes: ['id', 'email'] },
       ],
     });
-
+    
     res.json(messages);
   } catch (err) {
     console.error('GET /messages failed:', err);
@@ -370,29 +370,29 @@ app.post('/messages', authenticateJWT, async (req, res) => {
   try {
     const senderId = req.user.userId;
     const { receiverId, content } = req.body || {};
-
+    
     // Validation
     if (!receiverId || !content) {
       return res.status(400).json({ error: 'bad_request', message: 'receiverId et content requis' });
     }
-
+    
     if (typeof content !== 'string' || content.trim().length === 0) {
       return res.status(400).json({ error: 'bad_request', message: 'Le contenu ne peut pas être vide' });
     }
-
+    
     // Check if receiver exists
     const receiver = await User.findByPk(receiverId);
     if (!receiver) {
       return res.status(404).json({ error: 'not_found', message: 'Destinataire introuvable' });
     }
-
+    
     // Save message
     const message = await Message.create({
       senderId,
       receiverId,
       content: content.trim(),
     });
-
+    
     // Emit to Socket.IO rooms (if connected)
     const roomName = getRoomName(senderId, receiverId);
     io.to(roomName).emit('message', {
@@ -402,7 +402,7 @@ app.post('/messages', authenticateJWT, async (req, res) => {
       content: message.content,
       createdAt: message.createdAt,
     });
-
+    
     res.status(201).json(message);
   } catch (err) {
     console.error('POST /messages failed:', err);
@@ -419,9 +419,9 @@ app.get('/users/search', authenticateJWT, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
     const { email } = req.query;
-
+    
     console.log(`[/users/search] Recherche utilisateur par email: "${email}"`);
-
+    
     // Validation
     if (!email || typeof email !== 'string' || email.trim().length === 0) {
       console.log('[/users/search] Email manquant ou invalide');
@@ -430,7 +430,7 @@ app.get('/users/search', authenticateJWT, async (req, res) => {
         message: 'Paramètre "email" requis pour la recherche'
       });
     }
-
+    
     // Search user by exact email match
     const user = await User.findOne({
       where: {
@@ -441,7 +441,7 @@ app.get('/users/search', authenticateJWT, async (req, res) => {
       },
       attributes: ['id', 'email', 'roles']
     });
-
+    
     if (!user) {
       console.log('[/users/search] Utilisateur non trouvé');
       return res.status(404).json({
@@ -449,9 +449,9 @@ app.get('/users/search', authenticateJWT, async (req, res) => {
         message: 'Utilisateur introuvable'
       });
     }
-
+    
     console.log(`[/users/search] Utilisateur trouvé: ${user.id} - ${user.email}`);
-
+    
     // Return single UserInfo object (not array)
     res.json({
       id: user.id,
@@ -473,10 +473,10 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
   try {
     const senderId = req.user.userId;
     const { receiverId } = req.body || {};
-
+    
     console.log(`[/friends/request] Demande d'ami de ${senderId} vers ${receiverId}`);
     console.log('[/friends/request] Body reçu:', req.body);
-
+    
     // Validation - receiverId must be present and be a number
     if (!receiverId) {
       console.log('[/friends/request] receiverId manquant');
@@ -485,7 +485,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
         message: 'receiverId requis'
       });
     }
-
+    
     if (typeof receiverId !== 'number' && isNaN(parseInt(receiverId))) {
       console.log('[/friends/request] receiverId invalide (pas un nombre)');
       return res.status(400).json({
@@ -493,9 +493,9 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
         message: 'receiverId doit être un nombre'
       });
     }
-
+    
     const actualReceiverId = typeof receiverId === 'number' ? receiverId : parseInt(receiverId);
-
+    
     // Cannot send request to yourself
     if (senderId === actualReceiverId) {
       console.log('[/friends/request] Tentative d\'ajout de soi-même');
@@ -504,7 +504,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
         message: 'Vous ne pouvez pas vous ajouter vous-même'
       });
     }
-
+    
     // Check if receiver exists
     const receiver = await User.findByPk(actualReceiverId);
     if (!receiver) {
@@ -514,7 +514,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
         message: 'Utilisateur introuvable'
       });
     }
-
+    
     // Check if friend request already exists (in either direction)
     const existingRequest = await FriendRequest.findOne({
       where: {
@@ -524,7 +524,7 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
         ]
       }
     });
-
+    
     if (existingRequest) {
       if (existingRequest.status === 'accepted') {
         console.log('[/friends/request] Déjà amis');
@@ -541,16 +541,16 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
         });
       }
     }
-
+    
     // Create friend request
     const friendRequest = await FriendRequest.create({
       senderId,
       receiverId: actualReceiverId,
       status: 'pending'
     });
-
+    
     console.log(`[/friends/request] Demande créée avec succès: ID ${friendRequest.id}`);
-
+    
     res.status(201).json({
       message: 'Demande d\'ami envoyée',
       id: friendRequest.id,
@@ -572,9 +572,9 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
 app.get('/friends/requests', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
-
+    
     console.log(`[/friends/requests] Récupération des demandes pour user ${userId}`);
-
+    
     const requests = await FriendRequest.findAll({
       where: {
         receiverId: userId,
@@ -589,9 +589,9 @@ app.get('/friends/requests', authenticateJWT, async (req, res) => {
       ],
       order: [['createdAt', 'DESC']]
     });
-
+    
     console.log(`[/friends/requests] ${requests.length} demandes trouvées`);
-
+    
     res.json({
       requests: requests.map(req => ({
         id: req.id,
@@ -609,15 +609,15 @@ app.get('/friends/requests', authenticateJWT, async (req, res) => {
   }
 });
 
-// Accept or reject a friend request
+// Accept or reject a friend request - WITH REALTIME NOTIFICATION
 app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
     const requestId = parseInt(req.params.id);
     const { action } = req.body || {}; // 'accept' or 'decline'
-
+    
     console.log(`[/friends/request/:id] User ${userId} - action: ${action} sur demande ${requestId}`);
-
+    
     // Validation
     if (!action || !['accept', 'decline'].includes(action)) {
       return res.status(400).json({
@@ -625,17 +625,17 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
         message: 'action doit être "accept" ou "decline"'
       });
     }
-
+    
     // Find the friend request
     const friendRequest = await FriendRequest.findByPk(requestId);
-
+    
     if (!friendRequest) {
       return res.status(404).json({
         error: 'not_found',
         message: 'Demande introuvable'
       });
     }
-
+    
     // Check if current user is the receiver
     if (friendRequest.receiverId !== userId) {
       return res.status(403).json({
@@ -643,7 +643,7 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
         message: 'Vous ne pouvez pas modifier cette demande'
       });
     }
-
+    
     // Check if already processed
     if (friendRequest.status !== 'pending') {
       return res.status(400).json({
@@ -651,16 +651,31 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
         message: 'Cette demande a déjà été traitée'
       });
     }
-
+    
     // Update status
     const newStatus = action === 'accept' ? 'accepted' : 'declined';
     await friendRequest.update({
       status: newStatus,
       updatedAt: new Date()
     });
-
+    
     console.log(`[/friends/request/:id] Statut mis à jour: ${newStatus}`);
-
+    
+    // NEW: Notify sender via Socket.IO
+    const senderSocketIds = userSockets.get(friendRequest.senderId);
+    if (senderSocketIds && senderSocketIds.size > 0) {
+      console.log(`[/friends/request/:id] Notification envoyée au sender ${friendRequest.senderId}`);
+      senderSocketIds.forEach(socketId => {
+        io.to(socketId).emit('friend_request_updated', {
+          requestId: friendRequest.id,
+          status: newStatus,
+          message: action === 'accept' 
+            ? 'Votre demande d\'ami a été acceptée' 
+            : 'Votre demande d\'ami a été refusée'
+        });
+      });
+    }
+    
     res.json({
       message: action === 'accept' ? 'Demande acceptée' : 'Demande refusée',
       id: friendRequest.id,
@@ -676,9 +691,9 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
 app.get('/friends', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
-
+    
     console.log(`[/friends] Récupération des amis de user ${userId}`);
-
+    
     // Get all accepted friend requests where user is either sender or receiver
     const friendRequests = await FriendRequest.findAll({
       where: {
@@ -702,9 +717,9 @@ app.get('/friends', authenticateJWT, async (req, res) => {
       ],
       order: [['updatedAt', 'DESC']]
     });
-
+    
     console.log(`[/friends] ${friendRequests.length} amis trouvés`);
-
+    
     // Map to get the friend (the other user)
     const friends = friendRequests.map(req => {
       const friend = req.senderId === userId ? req.receiver : req.sender;
@@ -717,7 +732,7 @@ app.get('/friends', authenticateJWT, async (req, res) => {
         since: req.updatedAt
       };
     });
-
+    
     res.json({ friends });
   } catch (err) {
     console.error('GET /friends failed:', err);
@@ -725,24 +740,24 @@ app.get('/friends', authenticateJWT, async (req, res) => {
   }
 });
 
-// Remove a friend (delete friendship)
+// Remove a friend (delete friendship) - WITH REALTIME NOTIFICATION
 app.delete('/friends/:id', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
     const friendshipId = parseInt(req.params.id);
-
+    
     console.log(`[DELETE /friends/:id] User ${userId} supprime friendship ${friendshipId}`);
-
+    
     // Find the friend request
     const friendRequest = await FriendRequest.findByPk(friendshipId);
-
+    
     if (!friendRequest) {
       return res.status(404).json({
         error: 'not_found',
         message: 'Amitié introuvable'
       });
     }
-
+    
     // Check if user is part of this friendship
     if (friendRequest.senderId !== userId && friendRequest.receiverId !== userId) {
       return res.status(403).json({
@@ -750,12 +765,32 @@ app.delete('/friends/:id', authenticateJWT, async (req, res) => {
         message: 'Vous ne pouvez pas supprimer cette amitié'
       });
     }
-
+    
+    // Determine the other user ID (the friend being removed)
+    const otherUserId = friendRequest.senderId === userId 
+      ? friendRequest.receiverId 
+      : friendRequest.senderId;
+    
     // Delete the friendship
     await friendRequest.destroy();
-
+    
     console.log(`[DELETE /friends/:id] Friendship ${friendshipId} supprimée`);
-
+    
+    // NEW: Notify the other user via Socket.IO
+    const otherUserSocketIds = userSockets.get(otherUserId);
+    if (otherUserSocketIds && otherUserSocketIds.size > 0) {
+      console.log(`[DELETE /friends/:id] Notification envoyée à l'utilisateur ${otherUserId} (${otherUserSocketIds.size} sockets)`);
+      otherUserSocketIds.forEach(socketId => {
+        io.to(socketId).emit('friendship_deleted', {
+          friendshipId,
+          deletedBy: userId,
+          message: 'Un ami vous a supprimé de sa liste'
+        });
+      });
+    } else {
+      console.log(`[DELETE /friends/:id] Utilisateur ${otherUserId} non connecté`);
+    }
+    
     res.json({ message: 'Ami supprimé avec succès' });
   } catch (err) {
     console.error('DELETE /friends/:id failed:', err);
@@ -776,28 +811,36 @@ function getRoomName(userId1, userId2) {
 
 // Store connected users: { socketId: userId }
 const connectedUsers = new Map();
+// NEW: Store sockets by userId: { userId: Set<socketId> }
+const userSockets = new Map();
 
 io.on('connection', (socket) => {
   console.log('Socket connected:', socket.id);
-
+  
   // Authenticate socket connection
   socket.on('authenticate', async (data) => {
     try {
       const { token } = data || {};
-
+      
       if (!token) {
         socket.emit('error', { message: 'Token manquant' });
         return;
       }
-
+      
       // Verify JWT
       const decoded = jwt.verify(token, JWT_SECRET);
       const userId = decoded.userId;
-
+      
       // Store user
       connectedUsers.set(socket.id, userId);
       socket.userId = userId;
-
+      
+      // NEW: Register socket for this user
+      if (!userSockets.has(userId)) {
+        userSockets.set(userId, new Set());
+      }
+      userSockets.get(userId).add(socket.id);
+      
       console.log(`User ${userId} authenticated on socket ${socket.id}`);
       socket.emit('authenticated', { userId, message: 'Authentification réussie' });
     } catch (err) {
@@ -805,25 +848,25 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'Token invalide' });
     }
   });
-
+  
   // Join a conversation room
   socket.on('join_conversation', (data) => {
     try {
       const { otherUserId } = data || {};
-
+      
       if (!socket.userId) {
         socket.emit('error', { message: 'Non authentifié. Utilisez l\'événement "authenticate" d\'abord.' });
         return;
       }
-
+      
       if (!otherUserId || typeof otherUserId !== 'number') {
         socket.emit('error', { message: 'otherUserId invalide' });
         return;
       }
-
+      
       const roomName = getRoomName(socket.userId, otherUserId);
       socket.join(roomName);
-
+      
       console.log(`User ${socket.userId} joined room ${roomName}`);
       socket.emit('joined_conversation', { roomName, otherUserId });
     } catch (err) {
@@ -831,37 +874,37 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'Erreur lors de la jonction à la conversation' });
     }
   });
-
+  
   // Send message in real-time
   socket.on('send_message', async (data) => {
     try {
       const { receiverId, content } = data || {};
-
+      
       if (!socket.userId) {
         socket.emit('error', { message: 'Non authentifié' });
         return;
       }
-
+      
       // Validation
       if (!receiverId || !content || typeof content !== 'string' || content.trim().length === 0) {
         socket.emit('error', { message: 'receiverId et content requis' });
         return;
       }
-
+      
       // Check if receiver exists
       const receiver = await User.findByPk(receiverId);
       if (!receiver) {
         socket.emit('error', { message: 'Destinataire introuvable' });
         return;
       }
-
+      
       // Save message to database
       const message = await Message.create({
         senderId: socket.userId,
         receiverId,
         content: content.trim(),
       });
-
+      
       // Send to both users in the conversation room
       const roomName = getRoomName(socket.userId, receiverId);
       io.to(roomName).emit('message', {
@@ -871,20 +914,29 @@ io.on('connection', (socket) => {
         content: message.content,
         createdAt: message.createdAt,
       });
-
+      
       console.log(`Message sent from ${socket.userId} to ${receiverId} in room ${roomName}`);
     } catch (err) {
       console.error('Error handling send_message:', err);
       socket.emit('error', { message: 'Erreur lors de l\'envoi du message' });
     }
   });
-
+  
   // Disconnect
   socket.on('disconnect', () => {
     const userId = connectedUsers.get(socket.id);
     if (userId) {
       console.log(`User ${userId} disconnected (socket ${socket.id})`);
       connectedUsers.delete(socket.id);
+      
+      // NEW: Remove socket from userSockets
+      const sockets = userSockets.get(userId);
+      if (sockets) {
+        sockets.delete(socket.id);
+        if (sockets.size === 0) {
+          userSockets.delete(userId);
+        }
+      }
     } else {
       console.log('Socket disconnected:', socket.id);
     }
@@ -901,7 +953,7 @@ async function start() {
     // Do not alter existing schema; ensure models are usable
     await sequelize.sync({ alter: false });
     console.log('Database connected and models synced.');
-
+    
     httpServer.listen(PORT, () => {
       console.log(`✅ Server listening on port ${PORT}`);
       console.log(`📡 Socket.IO ready for real-time messaging`);
@@ -919,6 +971,10 @@ async function start() {
       console.log('  PUT    /friends/request/:id');
       console.log('  GET    /friends');
       console.log('  DELETE /friends/:id');
+      console.log('');
+      console.log('🔔 Socket.IO events:');
+      console.log('  - friendship_deleted (notifie quand un ami est supprimé)');
+      console.log('  - friend_request_updated (notifie quand une demande est acceptée/refusée)');
     });
   } catch (err) {
     console.error('Failed to start server:', err);
