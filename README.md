@@ -33,6 +33,7 @@ npm start
 ```bash
 PORT=3000
 DB_HOST=votre-serveur-db
+DB_PORT=3306
 DB_USER=votre-utilisateur
 DB_PASSWORD=votre-mot-de-passe
 DB_NAME=votre-base-de-donnees
