@@ -338,6 +338,30 @@ app.get('/me', authenticateJWT, async (req, res) => {
   }
 });
 
+// Get conversation history - COMPATIBILITÉ AVEC ANCIEN CODE ANDROID
+// Note: Dans le nouveau système, les messages sont stockés localement sur le téléphone
+// Cet endpoint retourne une liste vide car il n'y a plus d'historique côté serveur
+app.get('/messages', authenticateJWT, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const otherUserId = req.query.userId ? Number(req.query.userId) : null;
+
+    if (!otherUserId) {
+      return res.status(400).json({ error: 'bad_request', message: 'userId requis en query parameter' });
+    }
+
+    console.log(`[GET /messages] User ${currentUserId} demande l'historique avec user ${otherUserId}`);
+    console.log(`⚠️ Note: Dans le nouveau système, les messages sont stockés localement sur l'appareil`);
+
+    // Retourner une liste vide car les messages sont maintenant stockés localement
+    // L'application doit utiliser sa base de données Room locale
+    res.json([]);
+  } catch (err) {
+    console.error('GET /messages failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
 // Get offline/pending messages (not delivered yet)
 app.get('/messages/pending', authenticateJWT, async (req, res) => {
   try {
@@ -357,6 +381,83 @@ app.get('/messages/pending', authenticateJWT, async (req, res) => {
     res.json({ messages });
   } catch (err) {
     console.error('GET /messages/pending failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Send a message via REST - COMPATIBILITÉ AVEC ANCIEN CODE ANDROID
+// Note: Préférez utiliser Socket.IO pour la livraison directe en temps réel
+app.post('/messages', authenticateJWT, async (req, res) => {
+  try {
+    const senderId = req.user.userId;
+    const { receiverId, content } = req.body || {};
+
+    if (!receiverId || !content) {
+      return res.status(400).json({ error: 'bad_request', message: 'receiverId et content requis' });
+    }
+
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      return res.status(400).json({ error: 'bad_request', message: 'Le contenu ne peut pas être vide' });
+    }
+
+    const receiver = await User.findByPk(receiverId);
+    if (!receiver) {
+      return res.status(404).json({ error: 'not_found', message: 'Destinataire introuvable' });
+    }
+
+    console.log(`[POST /messages] Envoi message de ${senderId} vers ${receiverId} (via REST)`);
+
+    // Vérifier si le destinataire est en ligne
+    const receiverSockets = getUserSockets(receiverId);
+
+    if (receiverSockets.size > 0) {
+      // LIVRAISON DIRECTE - Le destinataire est en ligne
+      console.log(`📨 Livraison directe via Socket.IO (destinataire en ligne)`);
+      
+      const sender = await User.findByPk(senderId, { attributes: ['email'] });
+      const messageData = {
+        senderId,
+        senderEmail: sender.email,
+        receiverId,
+        content: content.trim(),
+        timestamp: Date.now()
+      };
+
+      receiverSockets.forEach(socketId => {
+        io.to(socketId).emit('message', messageData);
+      });
+
+      // Retourner une réponse factice pour l'API (le message n'est PAS stocké en BDD)
+      res.status(201).json({
+        id: 0, // ID fictif
+        senderId,
+        receiverId,
+        content: content.trim(),
+        createdAt: new Date().toISOString(),
+        delivered: true
+      });
+    } else {
+      // STOCKAGE OFFLINE - Le destinataire est hors ligne
+      console.log(`💾 Destinataire offline, stockage en BDD`);
+      
+      const message = await Message.create({
+        senderId,
+        receiverId,
+        content: content.trim(),
+        delivered: false
+      });
+
+      res.status(201).json({
+        id: message.id,
+        senderId: message.senderId,
+        receiverId: message.receiverId,
+        content: message.content,
+        createdAt: message.createdAt,
+        delivered: false
+      });
+    }
+  } catch (err) {
+    console.error('POST /messages failed:', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
@@ -660,7 +761,7 @@ io.on('connection', (socket) => {
 
       if (pendingMessages.length > 0) {
         console.log(`📬 Delivering ${pendingMessages.length} pending message(s) to user ${userId}`);
-        
+
         pendingMessages.forEach(msg => {
           socket.emit('message', {
             id: msg.id,
@@ -719,7 +820,7 @@ io.on('connection', (socket) => {
       if (receiverSockets.size > 0) {
         // DIRECT DELIVERY - receiver is online
         console.log(`📨 Direct delivery from ${socket.userId} to ${receiverId} (${receiverSockets.size} device(s))`);
-        
+
         let deliveredCount = 0;
         receiverSockets.forEach(socketId => {
           io.to(socketId).emit('message', messageData);
@@ -738,7 +839,7 @@ io.on('connection', (socket) => {
       } else {
         // STORE FOR OFFLINE DELIVERY
         console.log(`💾 Receiver ${receiverId} offline, storing message in DB`);
-        
+
         const savedMessage = await Message.create({
           senderId: socket.userId,
           receiverId,
@@ -781,7 +882,7 @@ io.on('connection', (socket) => {
 async function cleanupOldMessages() {
   try {
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    
+
     const deleted = await Message.destroy({
       where: {
         delivered: true,
