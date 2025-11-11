@@ -414,94 +414,53 @@ app.post('/messages', authenticateJWT, async (req, res) => {
 // USER SEARCH ENDPOINT
 // ============================================================================
 
-// Search users by email (for finding friends)
+// Search user by email - Returns single UserInfo object
 app.get('/users/search', authenticateJWT, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
-    const { q, email, exact, limit } = req.query;
+    const { email } = req.query;
+
+    console.log(`[/users/search] Recherche utilisateur par email: "${email}"`);
 
     // Validation
-    const searchQuery = q || email;
-    if (!searchQuery || typeof searchQuery !== 'string' || searchQuery.trim().length === 0) {
-      return res.status(400).json({ 
-        error: 'bad_request', 
-        message: 'Paramètre "q" ou "email" requis pour la recherche' 
+    if (!email || typeof email !== 'string' || email.trim().length === 0) {
+      console.log('[/users/search] Email manquant ou invalide');
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'Paramètre "email" requis pour la recherche'
       });
     }
 
-    const searchLimit = limit ? Math.min(parseInt(limit), 50) : 20;
-    const isExactSearch = exact === 'true' || exact === '1';
-
-    // Search users by email (exact or partial match)
-    let users;
-    
-    if (isExactSearch) {
-      // Exact match - returns single user or empty array
-      const user = await User.findOne({
-        where: {
-          email: searchQuery.trim(),
-          id: {
-            [Sequelize.Op.ne]: currentUserId  // Exclude current user
-          }
-        },
-        attributes: ['id', 'email', 'roles']
-      });
-      
-      users = user ? [user] : [];
-    } else {
-      // Partial match - returns multiple users
-      users = await User.findAll({
-        where: {
-          email: {
-            [Sequelize.Op.like]: `%${searchQuery}%`
-          },
-          id: {
-            [Sequelize.Op.ne]: currentUserId  // Exclude current user
-          }
-        },
-        attributes: ['id', 'email'],
-        limit: searchLimit
-      });
-    }
-
-    res.json({
-      users: users.map(u => ({
-        id: u.id,
-        email: u.email,
-        ...(isExactSearch && u.roles ? { roles: u.roles } : {})
-      }))
-    });
-  } catch (err) {
-    console.error('GET /users/search failed:', err);
-    res.status(500).json({ error: 'internal_error' });
-  }
-});
-
-// Get user by ID (for profile view)
-app.get('/users/:id', authenticateJWT, async (req, res) => {
-  try {
-    const userId = parseInt(req.params.id);
-
-    if (isNaN(userId)) {
-      return res.status(400).json({ error: 'bad_request', message: 'ID utilisateur invalide' });
-    }
-
-    const user = await User.findByPk(userId, {
+    // Search user by exact email match
+    const user = await User.findOne({
+      where: {
+        email: email.trim(),
+        id: {
+          [Sequelize.Op.ne]: currentUserId  // Exclude current user
+        }
+      },
       attributes: ['id', 'email', 'roles']
     });
 
     if (!user) {
-      return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
+      console.log('[/users/search] Utilisateur non trouvé');
+      return res.status(404).json({
+        error: 'not_found',
+        message: 'Utilisateur introuvable'
+      });
     }
 
+    console.log(`[/users/search] Utilisateur trouvé: ${user.id} - ${user.email}`);
+
+    // Return single UserInfo object (not array)
     res.json({
       id: user.id,
       email: user.email,
       roles: user.roles
     });
   } catch (err) {
-    console.error('GET /users/:id failed:', err);
-    res.status(500).json({ error: 'internal_error' });
+    console.error('GET /users/search failed:', err);
+    res.status(500).json({ error: 'internal_error', message: 'Erreur serveur' });
   }
 });
 
@@ -513,41 +472,47 @@ app.get('/users/:id', authenticateJWT, async (req, res) => {
 app.post('/friends/request', authenticateJWT, async (req, res) => {
   try {
     const senderId = req.user.userId;
-    const { receiverId, receiverEmail } = req.body || {};
+    const { receiverId } = req.body || {};
 
-    // Validation - accept either receiverId or receiverEmail
-    if (!receiverId && !receiverEmail) {
-      return res.status(400).json({ 
-        error: 'bad_request', 
-        message: 'receiverId ou receiverEmail requis' 
+    console.log(`[/friends/request] Demande d'ami de ${senderId} vers ${receiverId}`);
+    console.log('[/friends/request] Body reçu:', req.body);
+
+    // Validation - receiverId must be present and be a number
+    if (!receiverId) {
+      console.log('[/friends/request] receiverId manquant');
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'receiverId requis'
       });
     }
 
-    // Find receiver by ID or email
-    let receiver;
-    if (receiverId) {
-      if (typeof receiverId !== 'number') {
-        return res.status(400).json({ error: 'bad_request', message: 'receiverId doit être un nombre' });
-      }
-      receiver = await User.findByPk(receiverId);
-    } else {
-      // Find by email
-      if (typeof receiverEmail !== 'string' || receiverEmail.trim().length === 0) {
-        return res.status(400).json({ error: 'bad_request', message: 'receiverEmail invalide' });
-      }
-      receiver = await User.findOne({ where: { email: receiverEmail.trim() } });
+    if (typeof receiverId !== 'number' && isNaN(parseInt(receiverId))) {
+      console.log('[/friends/request] receiverId invalide (pas un nombre)');
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'receiverId doit être un nombre'
+      });
     }
 
-    // Check if receiver exists
-    if (!receiver) {
-      return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
-    }
-
-    const actualReceiverId = receiver.id;
+    const actualReceiverId = typeof receiverId === 'number' ? receiverId : parseInt(receiverId);
 
     // Cannot send request to yourself
     if (senderId === actualReceiverId) {
-      return res.status(400).json({ error: 'bad_request', message: 'Vous ne pouvez pas vous ajouter vous-même' });
+      console.log('[/friends/request] Tentative d\'ajout de soi-même');
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'Vous ne pouvez pas vous ajouter vous-même'
+      });
+    }
+
+    // Check if receiver exists
+    const receiver = await User.findByPk(actualReceiverId);
+    if (!receiver) {
+      console.log('[/friends/request] Destinataire introuvable');
+      return res.status(404).json({
+        error: 'not_found',
+        message: 'Utilisateur introuvable'
+      });
     }
 
     // Check if friend request already exists (in either direction)
@@ -562,10 +527,18 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
 
     if (existingRequest) {
       if (existingRequest.status === 'accepted') {
-        return res.status(409).json({ error: 'conflict', message: 'Vous êtes déjà amis' });
+        console.log('[/friends/request] Déjà amis');
+        return res.status(409).json({
+          error: 'conflict',
+          message: 'Vous êtes déjà amis'
+        });
       }
       if (existingRequest.status === 'pending') {
-        return res.status(409).json({ error: 'conflict', message: 'Demande déjà envoyée' });
+        console.log('[/friends/request] Demande déjà envoyée');
+        return res.status(409).json({
+          error: 'conflict',
+          message: 'Demande déjà envoyée'
+        });
       }
     }
 
@@ -576,19 +549,22 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
       status: 'pending'
     });
 
+    console.log(`[/friends/request] Demande créée avec succès: ID ${friendRequest.id}`);
+
     res.status(201).json({
       message: 'Demande d\'ami envoyée',
-      request: {
-        id: friendRequest.id,
-        senderId: friendRequest.senderId,
-        receiverId: friendRequest.receiverId,
-        status: friendRequest.status,
-        createdAt: friendRequest.createdAt
-      }
+      id: friendRequest.id,
+      senderId: friendRequest.senderId,
+      receiverId: friendRequest.receiverId,
+      status: friendRequest.status,
+      createdAt: friendRequest.createdAt
     });
   } catch (err) {
     console.error('POST /friends/request failed:', err);
-    res.status(500).json({ error: 'internal_error', message: 'Erreur lors de l\'envoi de la demande' });
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Erreur lors de l\'envoi de la demande'
+    });
   }
 });
 
@@ -596,6 +572,8 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
 app.get('/friends/requests', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
+
+    console.log(`[/friends/requests] Récupération des demandes pour user ${userId}`);
 
     const requests = await FriendRequest.findAll({
       where: {
@@ -611,6 +589,8 @@ app.get('/friends/requests', authenticateJWT, async (req, res) => {
       ],
       order: [['createdAt', 'DESC']]
     });
+
+    console.log(`[/friends/requests] ${requests.length} demandes trouvées`);
 
     res.json({
       requests: requests.map(req => ({
@@ -636,38 +616,55 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
     const requestId = parseInt(req.params.id);
     const { action } = req.body || {}; // 'accept' or 'decline'
 
+    console.log(`[/friends/request/:id] User ${userId} - action: ${action} sur demande ${requestId}`);
+
     // Validation
     if (!action || !['accept', 'decline'].includes(action)) {
-      return res.status(400).json({ error: 'bad_request', message: 'action doit être "accept" ou "decline"' });
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'action doit être "accept" ou "decline"'
+      });
     }
 
     // Find the friend request
     const friendRequest = await FriendRequest.findByPk(requestId);
-    
+
     if (!friendRequest) {
-      return res.status(404).json({ error: 'not_found', message: 'Demande introuvable' });
+      return res.status(404).json({
+        error: 'not_found',
+        message: 'Demande introuvable'
+      });
     }
 
     // Check if current user is the receiver
     if (friendRequest.receiverId !== userId) {
-      return res.status(403).json({ error: 'forbidden', message: 'Vous ne pouvez pas modifier cette demande' });
+      return res.status(403).json({
+        error: 'forbidden',
+        message: 'Vous ne pouvez pas modifier cette demande'
+      });
     }
 
     // Check if already processed
     if (friendRequest.status !== 'pending') {
-      return res.status(400).json({ error: 'bad_request', message: 'Cette demande a déjà été traitée' });
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'Cette demande a déjà été traitée'
+      });
     }
 
     // Update status
     const newStatus = action === 'accept' ? 'accepted' : 'declined';
-    await friendRequest.update({ status: newStatus });
+    await friendRequest.update({
+      status: newStatus,
+      updatedAt: new Date()
+    });
+
+    console.log(`[/friends/request/:id] Statut mis à jour: ${newStatus}`);
 
     res.json({
       message: action === 'accept' ? 'Demande acceptée' : 'Demande refusée',
-      request: {
-        id: friendRequest.id,
-        status: newStatus
-      }
+      id: friendRequest.id,
+      status: newStatus
     });
   } catch (err) {
     console.error('PUT /friends/request/:id failed:', err);
@@ -679,6 +676,8 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
 app.get('/friends', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
+
+    console.log(`[/friends] Récupération des amis de user ${userId}`);
 
     // Get all accepted friend requests where user is either sender or receiver
     const friendRequests = await FriendRequest.findAll({
@@ -703,6 +702,8 @@ app.get('/friends', authenticateJWT, async (req, res) => {
       ],
       order: [['updatedAt', 'DESC']]
     });
+
+    console.log(`[/friends] ${friendRequests.length} amis trouvés`);
 
     // Map to get the friend (the other user)
     const friends = friendRequests.map(req => {
@@ -730,20 +731,30 @@ app.delete('/friends/:id', authenticateJWT, async (req, res) => {
     const userId = req.user.userId;
     const friendshipId = parseInt(req.params.id);
 
+    console.log(`[DELETE /friends/:id] User ${userId} supprime friendship ${friendshipId}`);
+
     // Find the friend request
     const friendRequest = await FriendRequest.findByPk(friendshipId);
 
     if (!friendRequest) {
-      return res.status(404).json({ error: 'not_found', message: 'Amitié introuvable' });
+      return res.status(404).json({
+        error: 'not_found',
+        message: 'Amitié introuvable'
+      });
     }
 
     // Check if user is part of this friendship
-    if (friendRequest.requesterId !== userId && friendRequest.receiverId !== userId) {
-      return res.status(403).json({ error: 'forbidden', message: 'Vous ne pouvez pas supprimer cette amitié' });
+    if (friendRequest.senderId !== userId && friendRequest.receiverId !== userId) {
+      return res.status(403).json({
+        error: 'forbidden',
+        message: 'Vous ne pouvez pas supprimer cette amitié'
+      });
     }
 
     // Delete the friendship
     await friendRequest.destroy();
+
+    console.log(`[DELETE /friends/:id] Friendship ${friendshipId} supprimée`);
 
     res.json({ message: 'Ami supprimé avec succès' });
   } catch (err) {
@@ -895,6 +906,19 @@ async function start() {
       console.log(`✅ Server listening on port ${PORT}`);
       console.log(`📡 Socket.IO ready for real-time messaging`);
       console.log(`🔐 JWT authentication enabled`);
+      console.log('');
+      console.log('📋 Available endpoints:');
+      console.log('  POST   /register');
+      console.log('  POST   /login');
+      console.log('  GET    /me');
+      console.log('  GET    /users/search?email=...');
+      console.log('  GET    /messages?userId=...');
+      console.log('  POST   /messages');
+      console.log('  POST   /friends/request');
+      console.log('  GET    /friends/requests');
+      console.log('  PUT    /friends/request/:id');
+      console.log('  GET    /friends');
+      console.log('  DELETE /friends/:id');
     });
   } catch (err) {
     console.error('Failed to start server:', err);
