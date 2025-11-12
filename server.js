@@ -40,10 +40,12 @@ const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
   port: DB_PORT,
   dialect: 'mysql',
   logging: false,
-  dialectOptions: {}
+  dialectOptions: {
+    // You can add timezone or SSL options here if needed
+  }
 });
 
-// Define User model
+// Define User model aligned with existing MySQL schema
 const User = sequelize.define(
   'User',
   {
@@ -80,7 +82,7 @@ const User = sequelize.define(
   }
 );
 
-// Define Message model - ONLY for offline/pending messages
+// Define Message model aligned with existing MySQL schema
 const Message = sequelize.define(
   'Message',
   {
@@ -103,12 +105,6 @@ const Message = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: false,
     },
-    delivered: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false,
-      field: 'delivered'
-    },
     createdAt: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -122,7 +118,7 @@ const Message = sequelize.define(
   }
 );
 
-// Define FriendRequest model
+// Define FriendRequest model (maps to existing 'friends' table)
 const FriendRequest = sequelize.define(
   'FriendRequest',
   {
@@ -167,45 +163,10 @@ const FriendRequest = sequelize.define(
 // Define associations
 Message.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
 Message.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
+
+// Friend request associations
 FriendRequest.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
 FriendRequest.belongsTo(User, { foreignKey: 'receiverId', as: 'receiver' });
-
-// ============================================================================
-// ONLINE USERS TRACKING
-// ============================================================================
-
-// Map userId to Set of socketIds (a user can have multiple devices)
-const userSockets = new Map();
-
-function isUserOnline(userId) {
-  const sockets = userSockets.get(userId);
-  return sockets && sockets.size > 0;
-}
-
-function getUserSockets(userId) {
-  return userSockets.get(userId) || new Set();
-}
-
-function addUserSocket(userId, socketId) {
-  if (!userSockets.has(userId)) {
-    userSockets.set(userId, new Set());
-  }
-  userSockets.get(userId).add(socketId);
-  console.log(`✅ User ${userId} now has ${userSockets.get(userId).size} socket(s) connected`);
-}
-
-function removeUserSocket(userId, socketId) {
-  const sockets = userSockets.get(userId);
-  if (sockets) {
-    sockets.delete(socketId);
-    if (sockets.size === 0) {
-      userSockets.delete(userId);
-      console.log(`❌ User ${userId} is now offline`);
-    } else {
-      console.log(`⚠️ User ${userId} still has ${sockets.size} socket(s) connected`);
-    }
-  }
-}
 
 // ============================================================================
 // AUTHENTICATION MIDDLEWARE
@@ -218,11 +179,11 @@ const authenticateJWT = (req, res, next) => {
     return res.status(401).json({ error: 'unauthorized', message: 'Token manquant ou invalide' });
   }
 
-  const token = authHeader.substring(7);
+  const token = authHeader.substring(7); // Remove 'Bearer ' prefix
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
+    req.user = decoded; // { userId, email, roles }
     next();
   } catch (err) {
     console.error('JWT verification failed:', err.message);
@@ -234,15 +195,17 @@ const authenticateJWT = (req, res, next) => {
 // PUBLIC ENDPOINTS
 // ============================================================================
 
+// Health check
 app.get('/', (_req, res) => {
-  res.json({ status: 'ok', message: 'Realtime Messaging API with Direct Delivery' });
+  res.json({ status: 'ok', message: 'Realtime Messaging API' });
 });
 
-// Register
+// Register new user
 app.post('/register', async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
+    // Validation
     if (!email || !password) {
       return res.status(400).json({ error: 'bad_request', message: 'Email et mot de passe requis' });
     }
@@ -251,21 +214,29 @@ app.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'bad_request', message: 'Le mot de passe doit contenir au moins 6 caractères' });
     }
 
+    // Check if user already exists
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) {
       return res.status(409).json({ error: 'conflict', message: 'Cet email est déjà utilisé' });
     }
 
+    // Hash password (compatible with Symfony bcrypt)
     const hashedPassword = await bcrypt.hash(password, 13);
 
+    // Create user
     const user = await User.create({
       email,
       password: hashedPassword,
       roles: ['ROLE_USER'],
     });
 
+    // Generate JWT
     const token = jwt.sign(
-      { userId: user.id, email: user.email, roles: user.roles },
+      {
+        userId: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
@@ -273,7 +244,11 @@ app.post('/register', async (req, res) => {
     res.status(201).json({
       message: 'Utilisateur créé avec succès',
       token,
-      user: { id: user.id, email: user.email, roles: user.roles },
+      user: {
+        id: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
     });
   } catch (err) {
     console.error('POST /register failed:', err);
@@ -286,22 +261,30 @@ app.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
+    // Validation
     if (!email || !password) {
       return res.status(400).json({ error: 'bad_request', message: 'Email et mot de passe requis' });
     }
 
+    // Find user
     const user = await User.findOne({ where: { email } });
     if (!user) {
       return res.status(401).json({ error: 'unauthorized', message: 'Email ou mot de passe incorrect' });
     }
 
+    // Verify password (compatible with Symfony bcrypt $2y$ format)
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'unauthorized', message: 'Email ou mot de passe incorrect' });
     }
 
+    // Generate JWT
     const token = jwt.sign(
-      { userId: user.id, email: user.email, roles: user.roles },
+      {
+        userId: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
@@ -309,7 +292,11 @@ app.post('/login', async (req, res) => {
     res.json({
       message: 'Connexion réussie',
       token,
-      user: { id: user.id, email: user.email, roles: user.roles },
+      user: {
+        id: user.id,
+        email: user.email,
+        roles: user.roles,
+      },
     });
   } catch (err) {
     console.error('POST /login failed:', err);
@@ -318,9 +305,10 @@ app.post('/login', async (req, res) => {
 });
 
 // ============================================================================
-// PROTECTED ENDPOINTS
+// PROTECTED ENDPOINTS (require JWT authentication)
 // ============================================================================
 
+// Get current user info
 app.get('/me', authenticateJWT, async (req, res) => {
   try {
     const user = await User.findByPk(req.user.userId, {
@@ -331,194 +319,150 @@ app.get('/me', authenticateJWT, async (req, res) => {
       return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
     }
 
-    res.json({ id: user.id, email: user.email, roles: user.roles });
+    res.json({
+      id: user.id,
+      email: user.email,
+      roles: user.roles,
+    });
   } catch (err) {
     console.error('GET /me failed:', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Get conversation history - COMPATIBILITÉ AVEC ANCIEN CODE ANDROID
-// Note: Dans le nouveau système, les messages sont stockés localement sur le téléphone
-// Cet endpoint retourne une liste vide car il n'y a plus d'historique côté serveur
+// Get conversation history between two users
+// GET /messages?userId=2 (returns conversation between current user and user ID 2)
 app.get('/messages', authenticateJWT, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
     const otherUserId = req.query.userId ? Number(req.query.userId) : null;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
 
     if (!otherUserId) {
       return res.status(400).json({ error: 'bad_request', message: 'userId requis en query parameter' });
     }
 
-    console.log(`[GET /messages] User ${currentUserId} demande l'historique avec user ${otherUserId}`);
-    console.log(`⚠️ Note: Dans le nouveau système, les messages sont stockés localement sur l'appareil`);
+    // Get messages between current user and other user (both directions)
+    const messages = await Message.findAll({
+      where: {
+        [Sequelize.Op.or]: [
+          { senderId: currentUserId, receiverId: otherUserId },
+          { senderId: otherUserId, receiverId: currentUserId },
+        ],
+      },
+      order: [['createdAt', 'ASC']],
+      limit,
+      include: [
+        { model: User, as: 'sender', attributes: ['id', 'email'] },
+        { model: User, as: 'receiver', attributes: ['id', 'email'] },
+      ],
+    });
 
-    // Retourner une liste vide car les messages sont maintenant stockés localement
-    // L'application doit utiliser sa base de données Room locale
-    res.json([]);
+    res.json(messages);
   } catch (err) {
     console.error('GET /messages failed:', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Get offline/pending messages (not delivered yet)
-app.get('/messages/pending', authenticateJWT, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    const messages = await Message.findAll({
-      where: {
-        receiverId: userId,
-        delivered: false
-      },
-      order: [['createdAt', 'ASC']],
-      include: [
-        { model: User, as: 'sender', attributes: ['id', 'email'] }
-      ],
-    });
-
-    res.json({ messages });
-  } catch (err) {
-    console.error('GET /messages/pending failed:', err);
-    res.status(500).json({ error: 'internal_error' });
-  }
-});
-
-// Send a message via REST - COMPATIBILITÉ AVEC ANCIEN CODE ANDROID
-// Note: Préférez utiliser Socket.IO pour la livraison directe en temps réel
+// Send a message (REST endpoint - alternative to Socket.IO)
 app.post('/messages', authenticateJWT, async (req, res) => {
   try {
     const senderId = req.user.userId;
     const { receiverId, content } = req.body || {};
 
-    console.log(`[POST /messages] Requête reçue:`, {
-      senderId,
-      receiverId,
-      content,
-      contentType: typeof content,
-      contentLength: content ? content.length : 0,
-      body: req.body
-    });
-
+    // Validation
     if (!receiverId || !content) {
-      console.log(`❌ Validation échouée: receiverId=${receiverId}, content=${content}`);
       return res.status(400).json({ error: 'bad_request', message: 'receiverId et content requis' });
     }
 
     if (typeof content !== 'string' || content.trim().length === 0) {
-      console.log(`❌ Validation échouée: contenu vide ou invalide`);
       return res.status(400).json({ error: 'bad_request', message: 'Le contenu ne peut pas être vide' });
     }
 
+    // Check if receiver exists
     const receiver = await User.findByPk(receiverId);
     if (!receiver) {
       return res.status(404).json({ error: 'not_found', message: 'Destinataire introuvable' });
     }
 
-    console.log(`[POST /messages] Envoi message de ${senderId} vers ${receiverId} (via REST)`);
+    // Save message to database only (no real-time emission)
+    const message = await Message.create({
+      senderId,
+      receiverId,
+      content: content.trim(),
+    });
 
-    // Vérifier si le destinataire est en ligne
-    const receiverSockets = getUserSockets(receiverId);
-
-    if (receiverSockets.size > 0) {
-      // LIVRAISON DIRECTE - Le destinataire est en ligne
-      console.log(`📨 Livraison directe via Socket.IO (destinataire en ligne)`);
-
-      const sender = await User.findByPk(senderId, { attributes: ['email'] });
-
-      if (!sender) {
-        console.error(`❌ Erreur: Sender ${senderId} introuvable dans la base de données!`);
-        return res.status(500).json({ error: 'internal_error', message: 'Erreur: expéditeur introuvable' });
-      }
-
-      const messageData = {
-        senderId,
-        senderEmail: sender.email,
-        receiverId,
-        content: content.trim(),
-        timestamp: Date.now()
-      };
-
-      receiverSockets.forEach(socketId => {
-        io.to(socketId).emit('message', messageData);
-      });
-
-      // Retourner une réponse factice pour l'API (le message n'est PAS stocké en BDD)
-      res.status(201).json({
-        id: 0, // ID fictif
-        senderId,
-        receiverId,
-        content: content.trim(),
-        createdAt: new Date().toISOString(),
-        delivered: true
-      });
-    } else {
-      // STOCKAGE OFFLINE - Le destinataire est hors ligne
-      console.log(`💾 Destinataire offline, stockage en BDD`);
-
-      const message = await Message.create({
-        senderId,
-        receiverId,
-        content: content.trim(),
-        delivered: false
-      });
-
-      res.status(201).json({
-        id: message.id,
-        senderId: message.senderId,
-        receiverId: message.receiverId,
-        content: message.content,
-        createdAt: message.createdAt,
-        delivered: false
-      });
-    }
+    res.status(201).json({
+      id: message.id,
+      senderId: message.senderId,
+      receiverId: message.receiverId,
+      content: message.content,
+      createdAt: message.createdAt,
+    });
   } catch (err) {
-    console.error('❌ POST /messages failed:', err.message);
-    console.error('Stack trace:', err.stack);
-    res.status(500).json({ error: 'internal_error', message: err.message });
-  }
-});
-
-// Mark messages as delivered (client confirms receipt)
-app.post('/messages/delivered', authenticateJWT, async (req, res) => {
-  try {
-    const { messageIds } = req.body || {};
-
-    if (!Array.isArray(messageIds)) {
-      return res.status(400).json({ error: 'bad_request', message: 'messageIds array required' });
-    }
-
-    await Message.update(
-      { delivered: true },
-      { where: { id: messageIds } }
-    );
-
-    res.json({ message: 'Messages marked as delivered', count: messageIds.length });
-  } catch (err) {
-    console.error('POST /messages/delivered failed:', err);
+    console.error('POST /messages failed:', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
 
-// Search user by email
+// ============================================================================
+// USER SEARCH ENDPOINT
+// ============================================================================
+
+// Search users by email (for finding friends)
 app.get('/users/search', authenticateJWT, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
-    const { email } = req.query;
+    const { q, email, limit } = req.query;
 
-    if (!email || typeof email !== 'string' || email.trim().length === 0) {
+    // Validation
+    const searchQuery = q || email;
+    if (!searchQuery || typeof searchQuery !== 'string' || searchQuery.trim().length === 0) {
       return res.status(400).json({
         error: 'bad_request',
-        message: 'Paramètre "email" requis'
+        message: 'Paramètre "q" ou "email" requis pour la recherche'
       });
     }
 
-    const user = await User.findOne({
+    const searchLimit = limit ? Math.min(parseInt(limit), 50) : 20;
+
+    // Search users by email (partial match)
+    const users = await User.findAll({
       where: {
-        email: email.trim(),
-        id: { [Sequelize.Op.ne]: currentUserId }
+        email: {
+          [Sequelize.Op.like]: `%${searchQuery}%`
+        },
+        id: {
+          [Sequelize.Op.ne]: currentUserId  // Exclude current user
+        }
       },
+      attributes: ['id', 'email'],
+      limit: searchLimit
+    });
+
+    res.json({
+      users: users.map(u => ({
+        id: u.id,
+        email: u.email
+      }))
+    });
+  } catch (err) {
+    console.error('GET /users/search failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Get user by ID (for profile view)
+app.get('/users/:id', authenticateJWT, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+
+    if (isNaN(userId)) {
+      return res.status(400).json({ error: 'bad_request', message: 'ID utilisateur invalide' });
+    }
+
+    const user = await User.findByPk(userId, {
       attributes: ['id', 'email', 'roles']
     });
 
@@ -526,37 +470,63 @@ app.get('/users/search', authenticateJWT, async (req, res) => {
       return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
     }
 
-    res.json({ id: user.id, email: user.email, roles: user.roles });
+    res.json({
+      id: user.id,
+      email: user.email,
+      roles: user.roles
+    });
   } catch (err) {
-    console.error('GET /users/search failed:', err);
+    console.error('GET /users/:id failed:', err);
     res.status(500).json({ error: 'internal_error' });
   }
 });
 
 // ============================================================================
-// FRIENDS SYSTEM
+// FRIENDS SYSTEM ENDPOINTS
 // ============================================================================
 
+// Send a friend request
 app.post('/friends/request', authenticateJWT, async (req, res) => {
   try {
     const senderId = req.user.userId;
-    const { receiverId } = req.body || {};
+    const { receiverId, receiverEmail } = req.body || {};
 
-    if (!receiverId) {
-      return res.status(400).json({ error: 'bad_request', message: 'receiverId requis' });
+    // Validation - accept either receiverId or receiverEmail
+    if (!receiverId && !receiverEmail) {
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'receiverId ou receiverEmail requis'
+      });
     }
 
-    const actualReceiverId = typeof receiverId === 'number' ? receiverId : parseInt(receiverId);
-
-    if (senderId === actualReceiverId) {
-      return res.status(400).json({ error: 'bad_request', message: 'Vous ne pouvez pas vous ajouter vous-même' });
+    // Find receiver by ID or email
+    let receiver;
+    if (receiverId) {
+      if (typeof receiverId !== 'number') {
+        return res.status(400).json({ error: 'bad_request', message: 'receiverId doit être un nombre' });
+      }
+      receiver = await User.findByPk(receiverId);
+    } else {
+      // Find by email
+      if (typeof receiverEmail !== 'string' || receiverEmail.trim().length === 0) {
+        return res.status(400).json({ error: 'bad_request', message: 'receiverEmail invalide' });
+      }
+      receiver = await User.findOne({ where: { email: receiverEmail.trim() } });
     }
 
-    const receiver = await User.findByPk(actualReceiverId);
+    // Check if receiver exists
     if (!receiver) {
       return res.status(404).json({ error: 'not_found', message: 'Utilisateur introuvable' });
     }
 
+    const actualReceiverId = receiver.id;
+
+    // Cannot send request to yourself
+    if (senderId === actualReceiverId) {
+      return res.status(400).json({ error: 'bad_request', message: 'Vous ne pouvez pas vous ajouter vous-même' });
+    }
+
+    // Check if friend request already exists (in either direction)
     const existingRequest = await FriendRequest.findOne({
       where: {
         [Sequelize.Op.or]: [
@@ -575,30 +545,38 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
       }
     }
 
+    // Create friend request
     const friendRequest = await FriendRequest.create({
       senderId,
       receiverId: actualReceiverId,
       status: 'pending'
     });
 
-    // Notify receiver if online
-    const receiverSockets = getUserSockets(actualReceiverId);
-    receiverSockets.forEach(socketId => {
-      io.to(socketId).emit('friend_request_received', {
-        id: friendRequest.id,
-        senderId,
-        senderEmail: req.user.email,
-        createdAt: friendRequest.createdAt
-      });
+    // Get sender info for notification
+    const sender = await User.findByPk(senderId, {
+      attributes: ['id', 'email']
+    });
+
+    // Emit real-time notification to receiver via Socket.IO
+    io.to(`user_${actualReceiverId}`).emit('friend_request', {
+      id: friendRequest.id,
+      sender: {
+        id: sender.id,
+        email: sender.email
+      },
+      status: friendRequest.status,
+      createdAt: friendRequest.createdAt
     });
 
     res.status(201).json({
       message: 'Demande d\'ami envoyée',
-      id: friendRequest.id,
-      senderId: friendRequest.senderId,
-      receiverId: friendRequest.receiverId,
-      status: friendRequest.status,
-      createdAt: friendRequest.createdAt
+      request: {
+        id: friendRequest.id,
+        senderId: friendRequest.senderId,
+        receiverId: friendRequest.receiverId,
+        status: friendRequest.status,
+        createdAt: friendRequest.createdAt
+      }
     });
   } catch (err) {
     console.error('POST /friends/request failed:', err);
@@ -606,20 +584,33 @@ app.post('/friends/request', authenticateJWT, async (req, res) => {
   }
 });
 
+// Get pending friend requests (received)
 app.get('/friends/requests', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
 
     const requests = await FriendRequest.findAll({
-      where: { receiverId: userId, status: 'pending' },
-      include: [{ model: User, as: 'sender', attributes: ['id', 'email'] }],
+      where: {
+        receiverId: userId,
+        status: 'pending'
+      },
+      include: [
+        {
+          model: User,
+          as: 'sender',
+          attributes: ['id', 'email']
+        }
+      ],
       order: [['createdAt', 'DESC']]
     });
 
     res.json({
       requests: requests.map(req => ({
         id: req.id,
-        sender: { id: req.sender.id, email: req.sender.email },
+        sender: {
+          id: req.sender.id,
+          email: req.sender.email
+        },
         status: req.status,
         createdAt: req.createdAt
       }))
@@ -630,47 +621,61 @@ app.get('/friends/requests', authenticateJWT, async (req, res) => {
   }
 });
 
+// Accept or reject a friend request
 app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
     const requestId = parseInt(req.params.id);
-    const { action } = req.body || {};
+    const { action } = req.body || {}; // 'accept' or 'decline'
 
+    // Validation
     if (!action || !['accept', 'decline'].includes(action)) {
       return res.status(400).json({ error: 'bad_request', message: 'action doit être "accept" ou "decline"' });
     }
 
+    // Find the friend request
     const friendRequest = await FriendRequest.findByPk(requestId);
 
     if (!friendRequest) {
       return res.status(404).json({ error: 'not_found', message: 'Demande introuvable' });
     }
 
+    // Check if current user is the receiver
     if (friendRequest.receiverId !== userId) {
       return res.status(403).json({ error: 'forbidden', message: 'Vous ne pouvez pas modifier cette demande' });
     }
 
+    // Check if already processed
     if (friendRequest.status !== 'pending') {
       return res.status(400).json({ error: 'bad_request', message: 'Cette demande a déjà été traitée' });
     }
 
+    // Update status
     const newStatus = action === 'accept' ? 'accepted' : 'declined';
-    await friendRequest.update({ status: newStatus, updatedAt: new Date() });
+    await friendRequest.update({ status: newStatus });
 
-    // Notify sender if online
-    const senderSockets = getUserSockets(friendRequest.senderId);
-    senderSockets.forEach(socketId => {
-      io.to(socketId).emit('friend_request_updated', {
-        requestId: friendRequest.id,
-        status: newStatus,
-        userId: userId
-      });
+    // Get receiver info for notification
+    const receiver = await User.findByPk(userId, {
+      attributes: ['id', 'email']
+    });
+
+    // Emit real-time notification to sender (person who sent the request)
+    io.to(`user_${friendRequest.senderId}`).emit('friend_request_response', {
+      requestId: friendRequest.id,
+      status: newStatus,
+      responder: {
+        id: receiver.id,
+        email: receiver.email
+      },
+      updatedAt: new Date()
     });
 
     res.json({
       message: action === 'accept' ? 'Demande acceptée' : 'Demande refusée',
-      id: friendRequest.id,
-      status: newStatus
+      request: {
+        id: friendRequest.id,
+        status: newStatus
+      }
     });
   } catch (err) {
     console.error('PUT /friends/request/:id failed:', err);
@@ -678,27 +683,44 @@ app.put('/friends/request/:id', authenticateJWT, async (req, res) => {
   }
 });
 
+// Get list of friends (accepted requests)
 app.get('/friends', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
 
+    // Get all accepted friend requests where user is either sender or receiver
     const friendRequests = await FriendRequest.findAll({
       where: {
-        [Sequelize.Op.or]: [{ senderId: userId }, { receiverId: userId }],
+        [Sequelize.Op.or]: [
+          { senderId: userId },
+          { receiverId: userId }
+        ],
         status: 'accepted'
       },
       include: [
-        { model: User, as: 'sender', attributes: ['id', 'email'] },
-        { model: User, as: 'receiver', attributes: ['id', 'email'] }
+        {
+          model: User,
+          as: 'sender',
+          attributes: ['id', 'email']
+        },
+        {
+          model: User,
+          as: 'receiver',
+          attributes: ['id', 'email']
+        }
       ],
       order: [['updatedAt', 'DESC']]
     });
 
+    // Map to get the friend (the other user)
     const friends = friendRequests.map(req => {
       const friend = req.senderId === userId ? req.receiver : req.sender;
       return {
         friendshipId: req.id,
-        friend: { id: friend.id, email: friend.email },
+        friend: {
+          id: friend.id,
+          email: friend.email
+        },
         since: req.updatedAt
       };
     });
@@ -710,33 +732,26 @@ app.get('/friends', authenticateJWT, async (req, res) => {
   }
 });
 
+// Remove a friend (delete friendship)
 app.delete('/friends/:id', authenticateJWT, async (req, res) => {
   try {
     const userId = req.user.userId;
     const friendshipId = parseInt(req.params.id);
 
+    // Find the friend request
     const friendRequest = await FriendRequest.findByPk(friendshipId);
 
     if (!friendRequest) {
       return res.status(404).json({ error: 'not_found', message: 'Amitié introuvable' });
     }
 
+    // Check if user is part of this friendship
     if (friendRequest.senderId !== userId && friendRequest.receiverId !== userId) {
       return res.status(403).json({ error: 'forbidden', message: 'Vous ne pouvez pas supprimer cette amitié' });
     }
 
-    const otherUserId = friendRequest.senderId === userId ? friendRequest.receiverId : friendRequest.senderId;
-
+    // Delete the friendship
     await friendRequest.destroy();
-
-    // Notify other user if online
-    const otherUserSockets = getUserSockets(otherUserId);
-    otherUserSockets.forEach(socketId => {
-      io.to(socketId).emit('friendship_deleted', {
-        friendshipId,
-        deletedBy: userId
-      });
-    });
 
     res.json({ message: 'Ami supprimé avec succès' });
   } catch (err) {
@@ -746,201 +761,154 @@ app.delete('/friends/:id', authenticateJWT, async (req, res) => {
 });
 
 // ============================================================================
-// SOCKET.IO - DIRECT MESSAGE DELIVERY
+// POLLING ENDPOINTS FOR MESSAGES
 // ============================================================================
 
-io.on('connection', (socket) => {
-  console.log('\n🔌 New socket connection:', socket.id);
+// Get new messages since a specific timestamp (for polling)
+app.get('/messages/new', authenticateJWT, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const since = req.query.since ? new Date(req.query.since) : null;
+    const otherUserId = req.query.userId ? Number(req.query.userId) : null;
 
+    if (!since) {
+      return res.status(400).json({
+        error: 'bad_request',
+        message: 'Paramètre "since" requis (ISO 8601 timestamp)'
+      });
+    }
+
+    // Build query for new messages
+    const whereClause = {
+      createdAt: { [Sequelize.Op.gt]: since }
+    };
+
+    // If userId specified, only get messages from/to that user
+    if (otherUserId) {
+      whereClause[Sequelize.Op.or] = [
+        { senderId: userId, receiverId: otherUserId },
+        { senderId: otherUserId, receiverId: userId }
+      ];
+    } else {
+      // Get all messages involving the user
+      whereClause[Sequelize.Op.or] = [
+        { senderId: userId },
+        { receiverId: userId }
+      ];
+    }
+
+    const newMessages = await Message.findAll({
+      where: whereClause,
+      order: [['createdAt', 'ASC']],
+      limit: 100,
+      include: [
+        { model: User, as: 'sender', attributes: ['id', 'email'] },
+        { model: User, as: 'receiver', attributes: ['id', 'email'] }
+      ]
+    });
+
+    res.json({
+      messages: newMessages,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('GET /messages/new failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// Get unread message count per conversation
+app.get('/messages/unread-count', authenticateJWT, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const since = req.query.since ? new Date(req.query.since) : null;
+
+    const whereClause = {
+      receiverId: userId
+    };
+
+    if (since) {
+      whereClause.createdAt = { [Sequelize.Op.gt]: since };
+    }
+
+    // Get all messages received by user and group by sender
+    const messages = await Message.findAll({
+      where: whereClause,
+      attributes: [
+        'senderId',
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+        [sequelize.fn('MAX', sequelize.col('created_at')), 'lastMessageAt']
+      ],
+      include: [
+        { model: User, as: 'sender', attributes: ['id', 'email'] }
+      ],
+      group: ['senderId', 'sender.id', 'sender.email']
+    });
+
+    res.json({
+      unreadCounts: messages.map(m => ({
+        senderId: m.senderId,
+        senderEmail: m.sender.email,
+        unreadCount: parseInt(m.getDataValue('count')),
+        lastMessageAt: m.getDataValue('lastMessageAt')
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('GET /messages/unread-count failed:', err);
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// ============================================================================
+// SOCKET.IO - FRIEND REQUESTS REAL-TIME NOTIFICATIONS ONLY
+// ============================================================================
+
+// Store connected users: { userId: socketId }
+const connectedUsers = new Map();
+
+io.on('connection', (socket) => {
+  console.log('Socket connected:', socket.id);
+
+  // Authenticate socket connection
   socket.on('authenticate', async (data) => {
     try {
-      console.log(`\n🔐 [authenticate] Socket ${socket.id} attempting authentication...`);
       const { token } = data || {};
 
       if (!token) {
-        console.log(`   ❌ No token provided`);
         socket.emit('error', { message: 'Token manquant' });
         return;
       }
 
+      // Verify JWT
       const decoded = jwt.verify(token, JWT_SECRET);
       const userId = decoded.userId;
 
+      // Store user - map userId to socketId
+      connectedUsers.set(userId, socket.id);
       socket.userId = userId;
-      addUserSocket(userId, socket.id);
 
-      console.log(`   ✅ User ${userId} authenticated on socket ${socket.id}`);
-      console.log(`   📊 User ${userId} now has ${userSockets.get(userId)?.size || 0} active connection(s)`);
-      socket.emit('authenticated', { userId, message: 'Authentifié' });
+      // Join user's personal room for notifications
+      socket.join(`user_${userId}`);
 
-      // Deliver pending offline messages
-      const pendingMessages = await Message.findAll({
-        where: { receiverId: userId, delivered: false },
-        order: [['createdAt', 'ASC']],
-        include: [{ model: User, as: 'sender', attributes: ['id', 'email'] }]
-      });
-
-      if (pendingMessages.length > 0) {
-        console.log(`📬 Delivering ${pendingMessages.length} pending message(s) to user ${userId}`);
-
-        pendingMessages.forEach(msg => {
-          socket.emit('message', {
-            id: msg.id,
-            senderId: msg.senderId,
-            senderEmail: msg.sender.email,
-            content: msg.content,
-            timestamp: msg.createdAt.getTime(),
-            fromServer: true
-          });
-        });
-
-        // Mark as delivered
-        const messageIds = pendingMessages.map(m => m.id);
-        await Message.update({ delivered: true }, { where: { id: messageIds } });
-      }
+      console.log(`User ${userId} authenticated on socket ${socket.id}`);
+      socket.emit('authenticated', { userId, message: 'Authentification réussie' });
     } catch (err) {
-      console.error('❌ Socket authentication failed:', err.message);
+      console.error('Socket authentication failed:', err.message);
       socket.emit('error', { message: 'Token invalide' });
     }
   });
 
-  // MAIN MESSAGE HANDLER - DIRECT DELIVERY
-  socket.on('send_message', async (data) => {
-    try {
-      const { receiverId, content } = data || {};
-
-      console.log(`\n📨 [send_message] Received from user ${socket.userId}`);
-      console.log(`   → receiverId: ${receiverId}, content: "${content?.substring(0, 50)}..."`);
-
-      if (!socket.userId) {
-        console.log(`   ❌ Socket not authenticated`);
-        socket.emit('error', { message: 'Non authentifié' });
-        return;
-      }
-
-      if (!receiverId || !content || typeof content !== 'string' || content.trim().length === 0) {
-        console.log(`   ❌ Invalid data: receiverId or content missing`);
-        socket.emit('error', { message: 'receiverId et content requis' });
-        return;
-      }
-
-      const receiver = await User.findByPk(receiverId);
-      if (!receiver) {
-        console.log(`   ❌ Receiver ${receiverId} not found in database`);
-        socket.emit('error', { message: 'Destinataire introuvable' });
-        return;
-      }
-
-      const sender = await User.findByPk(socket.userId, { attributes: ['email'] });
-
-      const messageData = {
-        senderId: socket.userId,
-        senderEmail: sender.email,
-        receiverId,
-        content: content.trim(),
-        timestamp: Date.now()
-      };
-
-      // Check if receiver is online
-      console.log(`\n🔍 Checking if user ${receiverId} is online...`);
-      console.log(`   Current online users map:`, Array.from(userSockets.entries()).map(([id, sockets]) => `User ${id}: ${sockets.size} socket(s)`));
-
-      const receiverSockets = getUserSockets(receiverId);
-      console.log(`   → User ${receiverId} has ${receiverSockets.size} socket(s) connected`);
-
-      if (receiverSockets.size > 0) {
-        // DIRECT DELIVERY - receiver is online
-        console.log(`\n📨 ✅ DIRECT DELIVERY from ${socket.userId} to ${receiverId}`);
-        console.log(`   → Delivering to ${receiverSockets.size} device(s): [${Array.from(receiverSockets).join(', ')}]`);
-
-        let deliveredCount = 0;
-        receiverSockets.forEach(socketId => {
-          io.to(socketId).emit('message', messageData);
-          deliveredCount++;
-          console.log(`   ✓ Sent to socket ${socketId}`);
-        });
-
-        // Confirm to sender
-        socket.emit('message_delivered', {
-          tempId: data.tempId, // if client sends a temp ID
-          receiverId,
-          timestamp: messageData.timestamp,
-          direct: true
-        });
-
-        console.log(`   ✅ Message delivered directly to ${deliveredCount} device(s) - NOT STORED IN DB\n`);
-      } else {
-        // STORE FOR OFFLINE DELIVERY
-        console.log(`\n💾 ❌ OFFLINE STORAGE: Receiver ${receiverId} is offline`);
-        console.log(`   → Storing message in database...`);
-
-        const savedMessage = await Message.create({
-          senderId: socket.userId,
-          receiverId,
-          content: content.trim(),
-          delivered: false
-        });
-
-        // Confirm to sender (stored for later)
-        socket.emit('message_stored', {
-          tempId: data.tempId,
-          messageId: savedMessage.id,
-          receiverId,
-          timestamp: savedMessage.createdAt.getTime(),
-          offline: true
-        });
-
-        console.log(`   💾 Message stored with ID ${savedMessage.id}\n`);
-      }
-
-    } catch (err) {
-      console.error('❌ Error handling send_message:', err);
-      socket.emit('error', { message: 'Erreur lors de l\'envoi du message' });
-    }
-  });
-
+  // Disconnect
   socket.on('disconnect', () => {
-    console.log(`\n👋 [disconnect] Socket ${socket.id} disconnected`);
     if (socket.userId) {
-      const beforeCount = userSockets.get(socket.userId)?.size || 0;
-      removeUserSocket(socket.userId, socket.id);
-      const afterCount = userSockets.get(socket.userId)?.size || 0;
-      console.log(`   → User ${socket.userId}: ${beforeCount} → ${afterCount} connection(s)`);
-      if (afterCount === 0) {
-        console.log(`   ❌ User ${socket.userId} is now OFFLINE`);
-      }
+      console.log(`User ${socket.userId} disconnected (socket ${socket.id})`);
+      connectedUsers.delete(socket.userId);
     } else {
-      console.log(`   → Anonymous socket (not authenticated)`);
+      console.log('Socket disconnected:', socket.id);
     }
-    console.log('');
   });
 });
-
-// ============================================================================
-// CLEANUP JOB - Delete old delivered messages
-// ============================================================================
-
-async function cleanupOldMessages() {
-  try {
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-    const deleted = await Message.destroy({
-      where: {
-        delivered: true,
-        createdAt: { [Sequelize.Op.lt]: oneDayAgo }
-      }
-    });
-
-    if (deleted > 0) {
-      console.log(`🗑️ Cleaned up ${deleted} old delivered message(s)`);
-    }
-  } catch (err) {
-    console.error('❌ Cleanup job failed:', err);
-  }
-}
-
-// Run cleanup every hour
-setInterval(cleanupOldMessages, 60 * 60 * 1000);
 
 // ============================================================================
 // START SERVER
@@ -949,20 +917,18 @@ setInterval(cleanupOldMessages, 60 * 60 * 1000);
 async function start() {
   try {
     await sequelize.authenticate();
+    // Do not alter existing schema; ensure models are usable
     await sequelize.sync({ alter: false });
-    console.log('✅ Database connected');
+    console.log('Database connected and models synced.');
 
     httpServer.listen(PORT, () => {
-      console.log(`\n🚀 Server listening on port ${PORT}`);
-      console.log(`📡 Socket.IO ready for DIRECT message delivery`);
-      console.log(`💾 Messages stored in DB ONLY when receiver is offline`);
-      console.log(`🔐 JWT authentication enabled\n`);
+      console.log(`✅ Server listening on port ${PORT}`);
+      console.log(`📡 Socket.IO ready for friend request notifications`);
+      console.log(`💬 Messages via REST API (polling recommended)`);
+      console.log(`🔐 JWT authentication enabled`);
     });
-
-    // Run initial cleanup
-    await cleanupOldMessages();
   } catch (err) {
-    console.error('❌ Failed to start server:', err);
+    console.error('Failed to start server:', err);
     process.exit(1);
   }
 }
