@@ -685,8 +685,10 @@ app.get('/metrics', async (req, res) => {
 ## 📋 CHECKLIST PRÉ-PRODUCTION
 
 - [ ] Variables d'environnement définies (JWT_SECRET, ALLOWED_ORIGINS)
-- [ ] HTTPS activé (certificat SSL)
-- [ ] Rate limiting configuré
+- [ ] HTTPS activé via reverse proxy (Nginx/Traefik)
+- [ ] `app.set('trust proxy', 1)` activé dans Express
+- [ ] Rate limiting configuré avec vraie IP client
+- [ ] ALLOWED_ORIGINS en HTTPS uniquement
 - [ ] Logs centralisés (ex: Winston + ELK)
 - [ ] Monitoring actif (Prometheus + Grafana)
 - [ ] Backups automatiques de la DB
@@ -694,6 +696,9 @@ app.get('/metrics', async (req, res) => {
 - [ ] Redis configuré
 - [ ] Tests de charge effectués
 - [ ] Documentation à jour
+- [ ] Certificat SSL valide (Let's Encrypt)
+- [ ] Headers de sécurité (HSTS, CSP, etc.)
+- [ ] Socket.IO fonctionne en WSS
 
 ---
 

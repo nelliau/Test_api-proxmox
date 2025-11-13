@@ -49,9 +49,20 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 }
 ```
 
-**C. Configurer CORS** (ligne ~15)
+**C. Activer Trust Proxy** (ligne ~14, juste après `const app = express();`)
 
 ```javascript
+const app = express();
+
+// IMPORTANT: Trust proxy si derrière Nginx/Traefik/CloudFlare
+// Permet de récupérer la vraie IP du client via X-Forwarded-For
+app.set('trust proxy', 1); // 1 si un seul proxy, 2 si deux proxies, etc.
+```
+
+**D. Configurer CORS** (ligne ~15)
+
+```javascript
+// Pour HTTPS en production, utiliser https:// dans ALLOWED_ORIGINS
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'];
 
 app.use(cors({
@@ -60,6 +71,7 @@ app.use(cors({
     if (!origin || ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
+      console.warn(`CORS blocked: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -68,7 +80,7 @@ app.use(cors({
 }));
 ```
 
-**D. Ajouter les middlewares de sécurité** (après ligne ~16)
+**E. Ajouter les middlewares de sécurité** (après ligne ~16)
 
 ```javascript
 // Helmet pour headers de sécurité
@@ -105,7 +117,7 @@ const authLimiter = rateLimit({
 app.use('/api/', generalLimiter);
 ```
 
-**E. Appliquer authLimiter sur /register et /login**
+**F. Appliquer authLimiter sur /register et /login**
 
 ```javascript
 // Ligne ~204
@@ -119,7 +131,7 @@ app.post('/login', authLimiter, async (req, res) => {
 });
 ```
 
-**F. Ajouter validation d'email** (nouvelle fonction avant les routes)
+**G. Ajouter validation d'email** (nouvelle fonction avant les routes)
 
 ```javascript
 // Ligne ~193, avant les routes
@@ -134,7 +146,7 @@ function escapeLike(str) {
 }
 ```
 
-**G. Utiliser la validation d'email** (dans /register et /login)
+**H. Utiliser la validation d'email** (dans /register et /login)
 
 ```javascript
 // Dans /register (ligne ~209)
@@ -154,7 +166,7 @@ if (!email || !isValidEmail(email)) {
 }
 ```
 
-**H. Corriger l'injection SQL dans /users/search** (ligne ~436)
+**I. Corriger l'injection SQL dans /users/search** (ligne ~436)
 
 ```javascript
 // Avant:
@@ -176,7 +188,7 @@ const users = await User.findAll({
 });
 ```
 
-**I. Améliorer Socket.IO CORS** (ligne ~20)
+**J. Améliorer Socket.IO CORS** (ligne ~20)
 
 ```javascript
 const io = new SocketIOServer(httpServer, {
@@ -190,7 +202,7 @@ const io = new SocketIOServer(httpServer, {
 });
 ```
 
-**J. Optimiser Sequelize** (ligne ~38)
+**K. Optimiser Sequelize** (ligne ~38)
 
 ```javascript
 const sequelize = new Sequelize(DB_NAME, DB_USER, DB_PASSWORD, {
