@@ -365,7 +365,8 @@ app.get('/messages', authenticateJWT, async (req, res) => {
   }
 });
 
-// Send a message (REST endpoint - alternative to Socket.IO)
+  // Send a message (REST endpoint - alternative to Socket.IO)
+// ⚠️ IMPORTANT E2EE: Le content est chiffré, ne pas le modifier !
 app.post('/messages', authenticateJWT, async (req, res) => {
   try {
     const senderId = req.user.userId;
@@ -376,7 +377,8 @@ app.post('/messages', authenticateJWT, async (req, res) => {
       return res.status(400).json({ error: 'bad_request', message: 'receiverId et content requis' });
     }
 
-    if (typeof content !== 'string' || content.trim().length === 0) {
+    // Pour E2EE : le content est chiffré (base64), ne pas utiliser .trim()
+    if (typeof content !== 'string' || content.length === 0) {
       return res.status(400).json({ error: 'bad_request', message: 'Le contenu ne peut pas être vide' });
     }
 
@@ -386,11 +388,11 @@ app.post('/messages', authenticateJWT, async (req, res) => {
       return res.status(404).json({ error: 'not_found', message: 'Destinataire introuvable' });
     }
 
-    // Save message to database only (no real-time emission)
+    // Save message to database (content is encrypted, don't modify it)
     const message = await Message.create({
       senderId,
       receiverId,
-      content: content.trim(),
+      content: content,  // Pas de .trim() ! Contenu chiffré
     });
 
     res.status(201).json({

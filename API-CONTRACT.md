@@ -11,12 +11,13 @@
 
 | Info | Valeur |
 |------|--------|
-| **Version API** | 2.0 (E2EE) |
+| **Version API** | 2.0 (E2EE - Chiffrement asymétrique RSA) |
 | **Base URL** | `http://localhost:30443` (dev) / `https://api.dashkey.com` (prod) |
-| **Dernière mise à jour** | 2025-11-11 |
+| **Dernière mise à jour** | 2025-11-11 (E2EE simplifié) |
 | **Format** | JSON |
 | **Encoding** | UTF-8 |
 | **Timezone** | UTC (ISO 8601) |
+| **Type de chiffrement** | RSA asymétrique (clé publique/privée) |
 
 ---
 
@@ -112,10 +113,13 @@ Authorization: Bearer <JWT_TOKEN>
   "user": {
     "id": 1,
     "email": "alice@example.com",
-    "roles": ["ROLE_USER"]
+    "roles": ["ROLE_USER"],
+    "publicKey": null
   }
 }
 ```
+
+**Note :** `publicKey` est `null` à l'inscription. Utilisez `PUT /users/public-key` pour l'ajouter.
 
 **Response 400 (Validation Error) :**
 ```json
@@ -157,10 +161,13 @@ Authorization: Bearer <JWT_TOKEN>
   "user": {
     "id": 1,
     "email": "alice@example.com",
-    "roles": ["ROLE_USER"]
+    "roles": ["ROLE_USER"],
+    "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." 
   }
 }
 ```
+
+**Note :** `publicKey` peut être `null` si l'utilisateur ne l'a pas encore définie.
 
 **Response 401 (Invalid Credentials) :**
 ```json
@@ -186,9 +193,12 @@ Authorization: Bearer <token>
 {
   "id": 1,
   "email": "alice@example.com",
-  "roles": ["ROLE_USER"]
+  "roles": ["ROLE_USER"],
+  "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
 }
 ```
+
+**Note :** `publicKey` peut être `null` si pas encore définie.
 
 **Response 401 :**
 ```json
@@ -200,18 +210,19 @@ Authorization: Bearer <token>
 
 ---
 
-## 2️⃣ Gestion des clés E2EE
+## 2️⃣ Gestion des clés E2EE (RSA asymétrique)
 
 > ⚠️ **IMPORTANT :** 
-> - Le serveur stocke UNIQUEMENT les clés publiques
-> - Les clés privées NE DOIVENT JAMAIS quitter le client
-> - Tous les champs sont encodés en **base64**
+> - Le serveur stocke UNIQUEMENT les clés publiques RSA
+> - Les clés privées NE DOIVENT JAMAIS quitter le client Android
+> - Format : Clé publique encodée en **base64**
+> - Le chiffrement/déchiffrement = **responsabilité du client**
 
 ---
 
-### **POST /keys/upload**
+### **PUT /users/public-key**
 
-**Description :** Upload des clés publiques pour E2EE (appelé après inscription ou pour renouveler).
+**Description :** Mettre à jour sa clé publique RSA (appelé après inscription ou pour renouveler).
 
 **Headers :**
 ```
@@ -221,45 +232,21 @@ Authorization: Bearer <token>
 **Request Body :**
 ```json
 {
-  "identityKey": "BQZlPE...",
-  "signedPreKeyId": 1,
-  "signedPreKeyPublic": "BfY3tR...",
-  "signedPreKeySignature": "gH8kL2...",
-  "oneTimePreKeys": [
-    {
-      "keyId": 1,
-      "publicKey": "BcX9mN..."
-    },
-    {
-      "keyId": 2,
-      "publicKey": "BdP4qT..."
-    }
-  ]
+  "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
 }
 ```
 
-**Format des champs :**
-- `identityKey` : String base64 (clé d'identité publique)
-- `signedPreKeyId` : Integer (ID de la clé signée)
-- `signedPreKeyPublic` : String base64 (clé pré-signée publique)
-- `signedPreKeySignature` : String base64 (signature de la clé)
-- `oneTimePreKeys` : Array (optionnel, recommandé 50-100 clés)
-  - `keyId` : Integer (unique pour chaque clé)
-  - `publicKey` : String base64
+**Format :**
+- `publicKey` : String base64 (clé publique RSA 2048 bits ou plus)
 
 **Règles de validation :**
-- `identityKey` : Requis, non vide
-- `signedPreKeyId` : Requis, integer
-- `signedPreKeyPublic` : Requis, non vide
-- `signedPreKeySignature` : Requis, non vide
-- `oneTimePreKeys` : Optionnel, array
+- `publicKey` : Requis, non vide
 
-**Response 201 (Success) :**
+**Response 200 (Success) :**
 ```json
 {
-  "message": "Clés publiques uploadées avec succès",
-  "bundleId": 42,
-  "oneTimePreKeysCount": 100
+  "message": "Clé publique mise à jour avec succès",
+  "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
 }
 ```
 
@@ -267,19 +254,28 @@ Authorization: Bearer <token>
 ```json
 {
   "error": "bad_request",
-  "message": "identityKey, signedPreKeyId, signedPreKeyPublic, et signedPreKeySignature sont requis"
+  "message": "Clé publique requise"
+}
+```
+
+**Response 404 (User not found) :**
+```json
+{
+  "error": "not_found",
+  "message": "Utilisateur introuvable"
 }
 ```
 
 **Notes :**
-- Si un bundle existe déjà pour cet user, il est remplacé
-- Recommandation : Uploader 50-100 oneTimePreKeys
+- Peut être appelé plusieurs fois pour renouveler la clé
+- La clé privée correspondante ne doit JAMAIS être envoyée au serveur
+- Recommandation : Clé RSA 2048 bits minimum
 
 ---
 
-### **GET /keys/:userId**
+### **GET /users/:id/public-key**
 
-**Description :** Récupérer les clés publiques d'un autre utilisateur (pour initier une conversation chiffrée).
+**Description :** Récupérer la clé publique RSA d'un autre utilisateur (pour chiffrer un message).
 
 **Headers :**
 ```
@@ -287,86 +283,41 @@ Authorization: Bearer <token>
 ```
 
 **URL Parameters :**
-- `userId` : Integer (ID de l'utilisateur cible)
+- `id` : Integer (ID de l'utilisateur cible)
+
+**Exemple :**
+```
+GET /users/2/public-key
+```
 
 **Response 200 (Success) :**
 ```json
 {
   "userId": 2,
-  "identityKey": "BQZlPE...",
-  "signedPreKey": {
-    "keyId": 1,
-    "publicKey": "BfY3tR...",
-    "signature": "gH8kL2..."
-  },
-  "oneTimePreKey": {
-    "keyId": 42,
-    "publicKey": "BcX9mN..."
-  }
+  "email": "bob@example.com",
+  "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
 }
 ```
 
-**Response 200 (No oneTimePreKey available) :**
-```json
-{
-  "userId": 2,
-  "identityKey": "BQZlPE...",
-  "signedPreKey": {
-    "keyId": 1,
-    "publicKey": "BfY3tR...",
-    "signature": "gH8kL2..."
-  },
-  "oneTimePreKey": null
-}
-```
-
-**Response 404 (User has no keys) :**
+**Response 404 (User not found) :**
 ```json
 {
   "error": "not_found",
-  "message": "Clés publiques non trouvées pour cet utilisateur. L'utilisateur doit d'abord uploader ses clés."
+  "message": "Utilisateur introuvable"
+}
+```
+
+**Response 404 (No public key) :**
+```json
+{
+  "error": "not_found",
+  "message": "Clé publique non disponible"
 }
 ```
 
 **Notes importantes :**
-- ⚠️ **Les `oneTimePreKey` sont consommées** : une fois retournée, elle est supprimée du serveur
-- Si `oneTimePreKey` est `null`, le protocole fonctionne quand même (fallback sur signedPreKey)
-- Recommandation Android : Si `oneTimePreKey` est null, demander à l'utilisateur de régénérer des clés
-
----
-
-### **GET /keys**
-
-**Description :** Récupérer les informations sur son propre bundle de clés (pour monitoring).
-
-**Headers :**
-```
-Authorization: Bearer <token>
-```
-
-**Response 200 (Success) :**
-```json
-{
-  "bundleId": 42,
-  "userId": 1,
-  "signedPreKeyId": 1,
-  "oneTimePreKeysCount": 87,
-  "createdAt": "2025-11-11T10:00:00.000Z",
-  "updatedAt": "2025-11-11T15:30:00.000Z"
-}
-```
-
-**Response 404 (No keys uploaded) :**
-```json
-{
-  "error": "not_found",
-  "message": "Aucun bundle de clés trouvé. Utilisez POST /keys/upload pour en créer un."
-}
-```
-
-**Notes :**
-- Utilisez cet endpoint pour vérifier le nombre de oneTimePreKeys restantes
-- Si `oneTimePreKeysCount < 10`, re-uploader des clés
+- Utilisez cette clé pour chiffrer les messages destinés à cet utilisateur
+- La clé est persistante (pas consommée)
 
 ---
 
@@ -630,15 +581,21 @@ GET /users/search?q=alice&limit=10
   "users": [
     {
       "id": 1,
-      "email": "alice@example.com"
+      "email": "alice@example.com",
+      "roles": ["ROLE_USER"],
+      "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
     },
     {
       "id": 5,
-      "email": "alice.smith@gmail.com"
+      "email": "alice.smith@gmail.com",
+      "roles": ["ROLE_USER"],
+      "publicKey": null
     }
   ]
 }
 ```
+
+**Note :** `publicKey` peut être `null` si l'utilisateur ne l'a pas définie. Utilisez `GET /users/:id/public-key` pour obtenir uniquement la clé.
 
 **Response 400 (Missing parameter) :**
 ```json
@@ -677,9 +634,12 @@ GET /users/2
 {
   "id": 2,
   "email": "bob@example.com",
-  "roles": ["ROLE_USER"]
+  "roles": ["ROLE_USER"],
+  "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
 }
 ```
+
+**Note :** `publicKey` peut être `null`.
 
 **Response 404 (User not found) :**
 ```json
@@ -1087,18 +1047,21 @@ socket.disconnect();
 
 ## 📐 Règles métier importantes
 
-### **1. E2EE - Chiffrement**
+### **1. E2EE - Chiffrement RSA asymétrique**
 
 - ✅ Le chiffrement/déchiffrement est **toujours** fait côté client (Android)
 - ✅ Le serveur **ne peut jamais** lire le contenu des messages
-- ✅ Format du content : `"TYPE:base64_data"` où TYPE = PREKEY ou WHISPER
+- ✅ Le client utilise la clé publique du destinataire pour chiffrer
+- ✅ Le destinataire utilise sa clé privée pour déchiffrer
 - ❌ Le serveur **ne doit JAMAIS** valider ni modifier le `content` (pas de `.trim()`, pas de regex)
+- ✅ Format du content : Texte chiffré encodé en base64
 
-### **2. OneTimePreKeys**
+### **2. Clés publiques RSA**
 
-- ✅ Consommées automatiquement par le serveur lors de `GET /keys/:userId`
-- ✅ Si < 10 restantes, Android doit en régénérer et appeler `POST /keys/upload`
-- ✅ Si toutes consommées, le protocole fonctionne quand même (fallback sur signedPreKey)
+- ✅ Générées côté Android (paire clé publique/privée)
+- ✅ La clé publique est uploadée au serveur via `PUT /users/public-key`
+- ✅ La clé privée **NE DOIT JAMAIS** quitter l'appareil Android
+- ✅ Recommandation : RSA 2048 bits ou 4096 bits
 
 ### **3. Demandes d'ami**
 
@@ -1122,45 +1085,51 @@ socket.disconnect();
 
 ## 🧪 Exemples de flows complets
 
-### **Flow 1 : Inscription + Upload clés**
+### **Flow 1 : Inscription + Upload clé publique**
 
 ```
 1. POST /register
    → Reçoit token JWT
+   → publicKey = null au départ
 
-2. POST /keys/upload (avec token)
-   → Upload identityKey + signedPreKey + 100 oneTimePreKeys
+2. Génération locale (Android) :
+   → Générer paire RSA (clé publique + clé privée)
+   → Stocker clé privée en sécurité (Keystore Android)
 
-3. GET /me (avec token)
-   → Confirme que l'utilisateur est authentifié
+3. PUT /users/public-key (avec token)
+   → Upload clé publique RSA en base64
+
+4. GET /me (avec token)
+   → Confirme que publicKey est bien enregistrée
 ```
 
 ---
 
-### **Flow 2 : Envoi de premier message (E2EE)**
+### **Flow 2 : Envoi de message chiffré (E2EE RSA)**
 
 ```
 1. GET /users/search?q=bob
-   → Trouve Bob (userId=2)
+   → Trouve Bob (userId=2, publicKey: "MIIBIj...")
 
-2. GET /keys/2 (avec token)
-   → Récupère les clés publiques de Bob
-   → Initialise session Signal Protocol localement
+2. OU GET /users/2/public-key (avec token)
+   → Récupère uniquement la clé publique de Bob
 
 3. Chiffrement local (Android) :
    plaintext = "Salut Bob !"
-   → ciphertext = "PREKEY:aF3x9mK7..."
+   → Chiffrer avec la clé publique de Bob (RSA)
+   → ciphertext = "aF3x9mK7vP2qL8nR4jT6yW1z..." (base64)
 
 4. POST /messages (avec token)
-   { "receiverId": 2, "content": "PREKEY:aF3x9mK7..." }
-   → Message chiffré stocké en BDD
+   { "receiverId": 2, "content": "aF3x9mK7vP2qL8nR4jT6yW1z..." }
+   → Message chiffré stocké en BDD (serveur ne peut pas lire)
 
 5. Bob récupère le message :
    GET /messages/new?since=...
-   → Reçoit { "content": "PREKEY:aF3x9mK7..." }
+   → Reçoit { "content": "aF3x9mK7vP2qL8nR4jT6yW1z..." }
 
 6. Déchiffrement local (Android) :
-   ciphertext = "PREKEY:aF3x9mK7..."
+   ciphertext = "aF3x9mK7vP2qL8nR4jT6yW1z..."
+   → Déchiffrer avec sa clé privée RSA
    → plaintext = "Salut Bob !"
 ```
 
@@ -1204,8 +1173,16 @@ Alice (userId=1)                    Serveur                    Bob (userId=2)
 
 | Version | Date | Modifications |
 |---------|------|---------------|
-| **2.0** | 2025-11-11 | Ajout E2EE (endpoints /keys/*) |
+| **2.0** | 2025-11-11 | E2EE avec chiffrement asymétrique RSA |
+| **2.0-beta** | 2025-11-11 | E2EE Double Ratchet (abandonné) |
 | **1.0** | 2025-11-01 | Version initiale (sans E2EE) |
+
+### **Détails version 2.0 :**
+- Ajout champ `publicKey` dans le modèle User
+- Endpoint `PUT /users/public-key` : Upload/mise à jour clé publique
+- Endpoint `GET /users/:id/public-key` : Récupération clé publique
+- `publicKey` incluse dans register, login, /me, /users/search, /users/:id
+- Messages chiffrés avec RSA (le serveur ne peut pas lire)
 
 ---
 
@@ -1221,12 +1198,14 @@ Alice (userId=1)                    Serveur                    Bob (userId=2)
 
 ### **Android (Kotlin) :**
 
-- ✅ Utiliser `libsignal-client:0.42.2` pour E2EE
-- ✅ Implémenter SignalProtocolStore pour gérer les clés
-- ✅ Chiffrer AVANT d'envoyer, déchiffrer APRÈS réception
-- ✅ Format du content : `"TYPE:base64"` (PREKEY ou WHISPER)
+- ✅ Utiliser les APIs Java/Kotlin natives pour RSA (KeyPairGenerator, Cipher)
+- ✅ Générer paire de clés RSA 2048 bits minimum
+- ✅ Stocker clé privée dans Android Keystore (sécurisé)
+- ✅ Encoder clé publique en base64 pour l'upload
+- ✅ Chiffrer AVANT d'envoyer (avec clé publique destinataire)
+- ✅ Déchiffrer APRÈS réception (avec sa clé privée)
 - ✅ Polling toutes les 3-5 secondes avec `GET /messages/new`
-- ✅ Monitorer le nombre de oneTimePreKeys et régénérer si < 10
+- ✅ Gérer le cas où publicKey est null (utilisateur n'a pas encore de clé)
 
 ---
 
