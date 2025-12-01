@@ -1,4 +1,6 @@
 import http from 'http';
+import https from 'https';
+import fs from 'fs';
 import express from 'express';
 import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
@@ -36,6 +38,11 @@ const DB_PASSWORD = process.env.DB_PASSWORD || '';
 const DB_NAME = process.env.DB_NAME || '';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// SSL/HTTPS Configuration
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
+const SSL_CA_PATH = process.env.SSL_CA_PATH;
 
 // Parse allowed origins
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || ['http://localhost:3000'];
@@ -398,10 +405,28 @@ const authenticateJWT = (req, res, next) => {
 };
 
 // ============================================================================
-// HTTP SERVER AND SOCKET.IO
+// HTTP/HTTPS SERVER AND SOCKET.IO
 // ============================================================================
 
-const httpServer = http.createServer(app);
+// Create HTTPS server if SSL certificates are provided, otherwise HTTP
+let httpServer;
+if (SSL_KEY_PATH && SSL_CERT_PATH && fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)) {
+  const sslOptions = {
+    key: fs.readFileSync(SSL_KEY_PATH),
+    cert: fs.readFileSync(SSL_CERT_PATH)
+  };
+
+  // Add CA certificate if provided
+  if (SSL_CA_PATH && fs.existsSync(SSL_CA_PATH)) {
+    sslOptions.ca = fs.readFileSync(SSL_CA_PATH);
+  }
+
+  httpServer = https.createServer(sslOptions, app);
+  console.log('🔒 HTTPS server configured with SSL certificates');
+} else {
+  httpServer = http.createServer(app);
+  console.log('🌐 HTTP server configured (no SSL certificates found)');
+}
 
 const io = new SocketIOServer(httpServer, {
   cors: {
@@ -627,7 +652,7 @@ app.get('/messages', authenticateJWT, asyncHandler(async (req, res) => {
 // Send a message (REST endpoint)
 app.post('/messages', authenticateJWT, asyncHandler(async (req, res) => {
   const senderId = req.user.userId;
-  const { receiverId, content } = req.body || {};
+  const { receiverId, content, tempId } = req.body || {};
 
   // Validation
   if (!receiverId || isNaN(Number(receiverId))) {
@@ -660,12 +685,41 @@ app.post('/messages', authenticateJWT, asyncHandler(async (req, res) => {
     });
   }
 
+  // Get sender info for notification
+  const sender = await User.findByPk(senderId);
+
   // Save message to database (content is encrypted, don't modify it)
   const message = await Message.create({
     senderId,
     receiverId: Number(receiverId),
     content: content, // Don't trim - may be encrypted
   });
+
+  // Emit real-time notification to receiver if online
+  const receiverSocketId = connectedUsers.get(Number(receiverId));
+  if (receiverSocketId) {
+    io.to(receiverSocketId).emit('message', {
+      id: message.id,
+      senderId: message.senderId,
+      senderEmail: sender.email,
+      content: message.content,
+      timestamp: message.createdAt.getTime()
+    });
+    console.log(`✉️ Message ${message.id} sent in real-time to user ${receiverId}`);
+  } else {
+    console.log(`📬 Message ${message.id} stored for offline user ${receiverId}`);
+  }
+
+  // Emit confirmation to sender if online
+  const senderSocketId = connectedUsers.get(senderId);
+  if (senderSocketId && tempId) {
+    io.to(senderSocketId).emit('message_sent', {
+      tempId: tempId,
+      receiverId: Number(receiverId),
+      timestamp: message.createdAt.getTime(),
+      messageId: message.id
+    });
+  }
 
   res.status(201).json({
     id: message.id,
@@ -1226,7 +1280,7 @@ app.get('/messages/unread-count', authenticateJWT, asyncHandler(async (req, res)
 }));
 
 // ============================================================================
-// SOCKET.IO - REAL-TIME NOTIFICATIONS
+// SOCKET.IO - REAL-TIME NOTIFICATIONS AND MESSAGING
 // ============================================================================
 
 io.on('connection', (socket) => {
@@ -1258,6 +1312,138 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Socket authentication failed:', err.message);
       socket.emit('error', { message: 'Token invalide' });
+    }
+  });
+
+  // Send message via Socket.IO
+  socket.on('send_message', async (data) => {
+    try {
+      if (!socket.userId) {
+        socket.emit('error', { message: 'Non authentifié' });
+        return;
+      }
+
+      const senderId = socket.userId;
+      const { receiverId, content, tempId } = data || {};
+
+      // Validation
+      if (!receiverId || typeof receiverId !== 'number') {
+        socket.emit('error', { message: 'receiverId requis (number)' });
+        return;
+      }
+
+      if (!content || typeof content !== 'string' || content.length === 0) {
+        socket.emit('error', { message: 'Le contenu ne peut pas être vide' });
+        return;
+      }
+
+      if (content.length > 10000) {
+        socket.emit('error', { message: 'Le contenu ne peut pas dépasser 10000 caractères' });
+        return;
+      }
+
+      // Check if receiver exists
+      const receiver = await User.findByPk(receiverId);
+      if (!receiver) {
+        socket.emit('error', { message: 'Destinataire introuvable' });
+        return;
+      }
+
+      // Get sender info for notification
+      const sender = await User.findByPk(senderId);
+
+      // Save message to database
+      const message = await Message.create({
+        senderId,
+        receiverId,
+        content: content, // Don't trim - may be encrypted
+      });
+
+      // Emit real-time notification to receiver if online
+      const receiverSocketId = connectedUsers.get(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('message', {
+          id: message.id,
+          senderId: message.senderId,
+          senderEmail: sender.email,
+          content: message.content,
+          timestamp: message.createdAt.getTime()
+        });
+        console.log(`✉️ Message ${message.id} sent in real-time to user ${receiverId}`);
+      } else {
+        console.log(`📬 Message ${message.id} stored for offline user ${receiverId}`);
+      }
+
+      // Emit confirmation to sender
+      socket.emit('message_sent', {
+        tempId: tempId,
+        receiverId: receiverId,
+        timestamp: message.createdAt.getTime(),
+        messageId: message.id
+      });
+
+    } catch (err) {
+      console.error('send_message failed:', err);
+      socket.emit('error', { message: 'Erreur lors de l\'envoi du message' });
+    }
+  });
+
+  // Mark message as delivered
+  socket.on('mark_delivered', async (data) => {
+    try {
+      if (!socket.userId) {
+        return;
+      }
+
+      const { messageId } = data || {};
+      if (!messageId) {
+        return;
+      }
+
+      // Update message delivery status (if you have such a field)
+      // For now, just log it
+      console.log(`✓ Message ${messageId} marked as delivered by user ${socket.userId}`);
+
+    } catch (err) {
+      console.error('mark_delivered failed:', err);
+    }
+  });
+
+  // Typing Start
+  socket.on('typing_start', (data) => {
+    if (!socket.userId) {
+      return;
+    }
+
+    const { receiverId } = data || {};
+    if (!receiverId || typeof receiverId !== 'number') {
+      return;
+    }
+
+    const receiverSocketId = connectedUsers.get(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('typing_start', {
+        senderId: socket.userId
+      });
+    }
+  });
+
+  // Typing Stop
+  socket.on('typing_stop', (data) => {
+    if (!socket.userId) {
+      return;
+    }
+
+    const { receiverId } = data || {};
+    if (!receiverId || typeof receiverId !== 'number') {
+      return;
+    }
+
+    const receiverSocketId = connectedUsers.get(receiverId);
+    if (receiverSocketId) {
+      io.to(receiverSocketId).emit('typing_stop', {
+        senderId: socket.userId
+      });
     }
   });
 

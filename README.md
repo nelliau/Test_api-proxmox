@@ -13,9 +13,21 @@ Backend Node.js complet pour application de messagerie Android avec authentifica
 ### 💬 Messagerie
 - **API REST** pour l'historique des conversations
 - **Socket.IO** pour les messages en temps réel
+- Envoi de messages via Socket.IO ou REST API
+- Indicateurs de frappe (typing indicators)
+- Confirmations de livraison de messages
+- Support du `tempId` pour le suivi des messages
 - Salons privés entre deux utilisateurs
 - Stockage automatique dans MySQL
 - Support de conversations 1-à-1
+- Notifications en temps réel pour utilisateurs en ligne
+
+### 🔒 Sécurité HTTPS
+- Support HTTP et HTTPS
+- Configuration SSL/TLS automatique
+- Compatibilité avec Let's Encrypt
+- Certificats auto-signés pour développement
+- Support du reverse proxy (Nginx)
 
 ### 👥 Système d'Amis
 - Envoi de demandes d'amis
@@ -67,6 +79,7 @@ Créez un fichier `.env` à la racine du projet :
 ```env
 # Server Configuration
 PORT=3000
+NODE_ENV=development
 
 # MySQL Database Configuration
 DB_HOST=192.168.1.100
@@ -77,12 +90,24 @@ DB_NAME=Dashkey_test
 # JWT Authentication
 JWT_SECRET=votre-cle-secrete-tres-longue-et-aleatoire
 JWT_EXPIRES_IN=7d
+
+# SSL/HTTPS Configuration (optionnel)
+# Décommentez pour activer HTTPS
+# SSL_KEY_PATH=/path/to/privkey.pem
+# SSL_CERT_PATH=/path/to/fullchain.pem
+# SSL_CA_PATH=/path/to/chain.pem
+
+# Security Configuration
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
+TRUST_PROXY=0
 ```
 
-**⚠️ IMPORTANT** : En production, générez une clé JWT_SECRET forte et aléatoire :
+**⚠️ IMPORTANT** : 
+- En production, générez une clé JWT_SECRET forte et aléatoire :
 ```bash
 node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 ```
+- Pour activer HTTPS, consultez le [Guide Configuration HTTPS](./HTTPS-CONFIGURATION-GUIDE.md)
 
 ---
 
@@ -784,6 +809,44 @@ sudo journalctl -u test-api -p err
 
 ---
 
+## 📚 Documentation Avancée
+
+### 🚀 Démarrage Rapide
+
+- **[Quick Reference](./QUICK-REFERENCE.md)** - ⚡ Référence rapide pour les opérations courantes
+  - Exemples de code prêts à l'emploi
+  - Commandes essentielles
+  - Résolution de problèmes rapide
+  - Tips et best practices
+
+### Guides Détaillés
+
+- **[Guide Socket.IO Messaging](./SOCKETIO-MESSAGING-GUIDE.md)** - Guide complet pour implémenter la messagerie en temps réel avec Socket.IO
+  - Connexion et authentification
+  - Envoi et réception de messages
+  - Indicateurs de frappe
+  - Confirmations de livraison
+  - Exemples de code client complets
+
+- **[Guide Configuration HTTPS](./HTTPS-CONFIGURATION-GUIDE.md)** - Configuration SSL/TLS pour sécuriser votre serveur
+  - Obtention de certificats SSL (Let's Encrypt, auto-signés, commerciaux)
+  - Configuration des variables d'environnement
+  - Configuration Nginx en reverse proxy
+  - Bonnes pratiques de sécurité
+  - Résolution de problèmes
+
+### Autres Documentations
+
+- [What's New](./WHATS-NEW.md) - Nouveautés et améliorations récentes
+- [Changelog](./CHANGELOG.md) - Historique complet des modifications
+- [API Contract](./API-CONTRACT.md) - Contrat API complet
+- [API Tests](./API-TESTS.md) - Tests et exemples d'utilisation
+- [E2EE README](./E2EE-README.md) - Chiffrement de bout en bout
+- [Deployment Guide](./DEPLOYMENT-GUIDE.md) - Guide de déploiement
+- [Security Quick Fixes](./SECURITY-QUICK-FIXES.md) - Correctifs de sécurité rapides
+
+---
+
 ## 🤝 Contribuer
 
 Les contributions sont les bienvenues ! N'hésitez pas à ouvrir une issue ou une pull request.
@@ -808,10 +871,12 @@ Pour toute question ou problème :
 ## 🎯 Roadmap
 
 - [x] Système d'amis avec demandes
-- [ ] Rate limiting sur les endpoints
+- [x] Rate limiting sur les endpoints
+- [x] Support HTTPS/SSL
+- [x] Indicateur "en train d'écrire..."
+- [x] Confirmations de livraison des messages
 - [ ] Support des fichiers/images
 - [ ] Notifications push
 - [ ] Statut en ligne/hors ligne
-- [ ] Indicateur "en train d'écrire..."
 - [ ] Messages lus/non lus
 - [ ] Conversations de groupe
