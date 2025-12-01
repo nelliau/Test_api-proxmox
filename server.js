@@ -1,4 +1,6 @@
 import http from 'http';
+import https from 'https';
+import fs from 'fs';
 import express from 'express';
 import cors from 'cors';
 import { Server as SocketIOServer } from 'socket.io';
@@ -37,8 +39,16 @@ const DB_NAME = process.env.DB_NAME || '';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// Parse allowed origins
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || ['http://localhost:3000'];
+// SSL/TLS Configuration
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
+const SSL_CA_PATH = process.env.SSL_CA_PATH; // Optional: for certificate chain
+
+// Parse allowed origins (update to include HTTPS if using SSL)
+const defaultOrigins = process.env.SSL_CERT_PATH 
+  ? ['https://localhost:3000', 'http://localhost:3000']
+  : ['http://localhost:3000'];
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || defaultOrigins;
 
 console.log('🔧 Configuration:');
 console.log(`   - Environment: ${NODE_ENV}`);
@@ -398,10 +408,36 @@ const authenticateJWT = (req, res, next) => {
 };
 
 // ============================================================================
-// HTTP SERVER AND SOCKET.IO
+// HTTP/HTTPS SERVER AND SOCKET.IO
 // ============================================================================
 
-const httpServer = http.createServer(app);
+// Create HTTPS server if SSL certificates are provided, otherwise HTTP
+let httpServer;
+if (SSL_KEY_PATH && SSL_CERT_PATH && fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)) {
+  const options = {
+    key: fs.readFileSync(SSL_KEY_PATH),
+    cert: fs.readFileSync(SSL_CERT_PATH)
+  };
+
+  // Add CA certificate if provided (for certificate chain)
+  if (SSL_CA_PATH && fs.existsSync(SSL_CA_PATH)) {
+    options.ca = fs.readFileSync(SSL_CA_PATH);
+  }
+
+  httpServer = https.createServer(options, app);
+  console.log('🔒 HTTPS server configured');
+  console.log(`   - SSL Key: ${SSL_KEY_PATH}`);
+  console.log(`   - SSL Cert: ${SSL_CERT_PATH}`);
+  if (SSL_CA_PATH) {
+    console.log(`   - SSL CA: ${SSL_CA_PATH}`);
+  }
+} else {
+  httpServer = http.createServer(app);
+  console.log('⚠️  HTTP server configured (no SSL certificates found)');
+  if (NODE_ENV === 'production') {
+    console.warn('⚠️  WARNING: Running in production without HTTPS is not recommended!');
+  }
+}
 
 const io = new SocketIOServer(httpServer, {
   cors: {
@@ -1335,16 +1371,20 @@ async function start() {
     await sequelize.sync({ alter: false });
     console.log('✅ Database models synced');
 
-    // Start HTTP server
+    // Start HTTP/HTTPS server
+    const protocol = httpServer instanceof https.Server ? 'https' : 'http';
     httpServer.listen(PORT, () => {
       console.log('');
       console.log('════════════════════════════════════════════════════════');
-      console.log(`✅ Server running on port ${PORT}`);
+      console.log(`✅ Server running on ${protocol.toUpperCase()}://localhost:${PORT}`);
       console.log(`📡 Socket.IO ready for real-time notifications`);
       console.log(`💬 Messages via REST API (polling recommended)`);
       console.log(`🔐 JWT authentication enabled`);
       console.log(`🛡️  Security: Helmet + Rate Limiting + CORS`);
       console.log(`⚡ Optimization: Compression + Connection Pool`);
+      if (protocol === 'https') {
+        console.log(`🔒 HTTPS/TLS enabled`);
+      }
       console.log('════════════════════════════════════════════════════════');
       console.log('');
     });
