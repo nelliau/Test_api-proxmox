@@ -1371,19 +1371,21 @@ async function start() {
     await sequelize.sync({ alter: false });
     console.log('✅ Database models synced');
 
-    // Start HTTP/HTTPS server
+    // Start HTTP/HTTPS server (internal only - localhost)
     const protocol = httpServer instanceof https.Server ? 'https' : 'http';
-    httpServer.listen(PORT, () => {
+    const HOST = process.env.HOST || '127.0.0.1'; // Internal only (localhost)
+    
+    httpServer.listen(PORT, HOST, () => {
       console.log('');
       console.log('════════════════════════════════════════════════════════');
-      console.log(`✅ Server running on ${protocol.toUpperCase()}://localhost:${PORT}`);
+      console.log(`✅ Server running on ${protocol.toUpperCase()}://${HOST}:${PORT} (internal only)`);
       console.log(`📡 Socket.IO ready for real-time notifications`);
       console.log(`💬 Messages via REST API (polling recommended)`);
       console.log(`🔐 JWT authentication enabled`);
       console.log(`🛡️  Security: Helmet + Rate Limiting + CORS`);
       console.log(`⚡ Optimization: Compression + Connection Pool`);
       if (protocol === 'https') {
-        console.log(`🔒 HTTPS/TLS enabled`);
+        console.log(`🔒 HTTPS/TLS enabled (internal)`);
       }
       console.log('════════════════════════════════════════════════════════');
       console.log('');
